@@ -9,6 +9,8 @@ export interface UserProfile {
     name: string;
     // If role is cliente, they might have a linked client document ID
     clientId?: string;
+    // Client registration properties
+    cnpj?: string;
     // If role is equipe, they might be restricted to an area
     area?: string;
     createdAt: string;
