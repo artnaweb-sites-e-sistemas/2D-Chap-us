@@ -2,20 +2,26 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { Select } from '@/components/ui/select';
+import { Input } from '@/components/ui/input';
 import { collection, getDocs } from 'firebase/firestore';
 import { db } from '@/lib/firebase/config';
+import { getOrderSubtotal } from '@/lib/commerce';
+import { OrderRecord } from '@/types/store';
 
 interface OrderData {
     clientName: string;
     total: number;
     createdAt: Date;
     status: string;
+    carrier?: string;
 }
 
 export default function ReportsPage() {
     const [period, setPeriod] = useState('30');
     const [orders, setOrders] = useState<OrderData[]>([]);
     const [loading, setLoading] = useState(true);
+    const [statusFilter, setStatusFilter] = useState('faturado');
+    const [clientSearch, setClientSearch] = useState('');
 
     useEffect(() => {
         const fetchOrders = async () => {
@@ -23,9 +29,9 @@ export default function ReportsPage() {
                 const snap = await getDocs(collection(db, 'orders'));
                 const fetched: OrderData[] = [];
                 snap.forEach(doc => {
-                    const data = doc.data();
-                    if (data.status === 'faturado' && data.createdAt) {
-                        const fallbackSubtotal = (data.items || []).reduce((acc: number, item: any) => acc + (item.total || (item.unitPrice * item.quantity) || 0), 0);
+                    const data = doc.data() as Omit<OrderRecord, 'id'>;
+                    if (data.createdAt) {
+                        const fallbackSubtotal = getOrderSubtotal(data.items || []);
                         const docSubtotal = data.subtotal || fallbackSubtotal;
                         const docFreight = data.freight || 0;
                         const docTotal = docSubtotal + docFreight;
@@ -33,8 +39,11 @@ export default function ReportsPage() {
                         fetched.push({
                             clientName: data.clientName || 'Cliente Desconhecido',
                             total: docTotal,
-                            createdAt: data.createdAt.toDate(),
+                            createdAt: data.createdAt.toDate
+                                ? data.createdAt.toDate()
+                                : new Date(data.createdAt.seconds * 1000),
                             status: data.status,
+                            carrier: data.carrier || '',
                         });
                     }
                 });
@@ -53,7 +62,12 @@ export default function ReportsPage() {
         const days = parseInt(period);
         const cutoff = new Date(now.getTime() - (days * 24 * 60 * 60 * 1000));
 
-        const filtered = orders.filter(o => o.createdAt >= cutoff);
+        const filtered = orders.filter((order) => {
+            const matchesPeriod = order.createdAt >= cutoff;
+            const matchesStatus = !statusFilter || order.status === statusFilter;
+            const matchesSearch = !clientSearch || order.clientName.toLowerCase().includes(clientSearch.toLowerCase());
+            return matchesPeriod && matchesStatus && matchesSearch;
+        });
 
         let revenue = 0;
         const clientTotals: Record<string, number> = {};
@@ -69,16 +83,9 @@ export default function ReportsPage() {
             .slice(0, 5);
 
         return { filteredOrders: filtered, topClients: top, totalRevenue: revenue, totalOrders: filtered.length };
-    }, [orders, period]);
+    }, [clientSearch, orders, period, statusFilter]);
 
     const formatCurrency = (val: number) => `R$ ${val.toFixed(2).replace('.', ',')}`;
-
-    // Helper for rendering mock bars proportionately
-    const renderBar = (height: number, color: string, key: number) => {
-        // limit visual height to 100
-        const h = Math.min(Math.max(height, 5), 100);
-        return <div key={key} style={{ height: `${h}%` }} className={`w-8 rounded-t-sm flex-shrink-0 ${color} transition-all duration-500`} />;
-    };
 
     return (
         <div className="space-y-8">
@@ -96,6 +103,25 @@ export default function ReportsPage() {
                         <option value="90">Últimos 90 dias</option>
                         <option value="365">Este Ano</option>
                     </Select>
+                </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-[220px_220px_minmax(0,1fr)]">
+                <Select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="bg-white">
+                    <option value="">Todos os status</option>
+                    <option value="faturado">Faturado</option>
+                    <option value="enviado">Enviado</option>
+                    <option value="entregue">Entregue</option>
+                    <option value="aprovado">Aprovado</option>
+                </Select>
+                <Input
+                    value={clientSearch}
+                    onChange={(event) => setClientSearch(event.target.value)}
+                    placeholder="Filtrar por cliente"
+                    className="bg-white"
+                />
+                <div className="flex items-center justify-end text-sm text-muted-foreground">
+                    {filteredOrders.length} pedido(s) no recorte atual
                 </div>
             </div>
 

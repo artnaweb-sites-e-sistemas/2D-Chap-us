@@ -41,11 +41,12 @@ service cloud.firestore {
       // User can read their own doc; Staff can read anyone
       allow read: if request.auth != null && (request.auth.uid == userId || isStaff());
       
-      // On registration, allow create with strict defaults
-      allow create: if request.auth != null 
+      // On registration, allow create with strict defaults; Staff can create any user (e.g. novo cliente com senha)
+      allow create: if (request.auth != null 
                     && request.auth.uid == userId 
                     && request.resource.data.role == 'cliente' 
-                    && request.resource.data.status == 'aguardando_aprovacao';
+                    && request.resource.data.status == 'aguardando_aprovacao')
+                    || isStaff();
                     
       // User can update their own data but NOT their role or status. Staff can update anything.
       allow update: if isStaff() || 

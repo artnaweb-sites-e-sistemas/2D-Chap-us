@@ -2,11 +2,13 @@
 
 import { ClientForm } from '@/features/clients/components/ClientForm';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { collection, addDoc, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, doc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '@/lib/firebase/config';
 import { Suspense, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { getDoc } from 'firebase/firestore';
+import { ClientFormValues } from '@/features/clients/components/ClientForm';
+import { createClientAuthUser } from '@/services/client-auth';
 
 function NewClientContent() {
     const router = useRouter();
@@ -45,19 +47,51 @@ function NewClientContent() {
         fetchSettings();
     }, []);
 
-    const handleSave = async (data: any) => {
+    const handleSave = async (data: ClientFormValues) => {
         try {
+            let authUid = uid;
+            const clientFormData = { ...data };
+            const password = clientFormData.password;
+            delete clientFormData.password;
+            delete clientFormData.confirmPassword;
+
+            if (!authUid) {
+                if (!clientFormData.email || !password) {
+                    toast.error('Informe e-mail e senha para criar o acesso do cliente.');
+                    return;
+                }
+
+                const authUser = await createClientAuthUser(clientFormData.email, password);
+                authUid = authUser.uid;
+            }
+
             // Save new client to Firestore
             const clientData = {
-                ...data,
+                ...clientFormData,
                 createdAt: serverTimestamp(),
             };
             const docRef = await addDoc(collection(db, 'clients'), clientData);
 
-            // If we came from an approval flow, link the user and activate them
-            if (uid) {
-                const userRef = doc(db, 'users', uid);
+            if (authUid && !uid) {
+                await setDoc(doc(db, 'users', authUid), {
+                    name: clientFormData.contactName || clientFormData.razaoSocial,
+                    email: clientFormData.email,
+                    cnpj: clientFormData.cnpj,
+                    phone: clientFormData.phone,
+                    role: 'cliente',
+                    status: 'ativo',
+                    clientId: docRef.id,
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString(),
+                });
+            } else if (authUid) {
+                const userRef = doc(db, 'users', authUid);
                 await updateDoc(userRef, {
+                    name: clientFormData.contactName || clientFormData.razaoSocial,
+                    email: clientFormData.email,
+                    cnpj: clientFormData.cnpj,
+                    phone: clientFormData.phone,
+                    role: 'cliente',
                     status: 'ativo',
                     clientId: docRef.id,
                     updatedAt: serverTimestamp(),
@@ -90,7 +124,13 @@ function NewClientContent() {
             {loadingSettings ? (
                 <div className="p-8 text-center text-muted-foreground">Carregando formulário...</div>
             ) : (
-                <ClientForm onSubmit={handleSave} settingsData={settings} initialData={initialData} />
+                <ClientForm
+                    onSubmit={handleSave}
+                    settingsData={settings}
+                    initialData={initialData}
+                    showAccessFields
+                    requireAccessFields={!uid}
+                />
             )}
         </div>
     );

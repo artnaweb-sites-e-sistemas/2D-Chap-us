@@ -35,7 +35,12 @@ export const useCartStore = create<CartState>()(
             })),
 
             updateQuantity: (id, qtde) => set((state) => ({
-                items: state.items.map(i => i.id === id ? { ...i, qtde } : i)
+                items: state.items.map(i => {
+                    if (i.id !== id) return i;
+
+                    const safeQty = Number.isFinite(qtde) ? qtde : i.minQt;
+                    return { ...i, qtde: Math.max(safeQty, i.minQt) };
+                })
             })),
 
             clearCart: () => set({ items: [] }),

@@ -9,14 +9,17 @@ import { updateEmail } from 'firebase/auth';
 import { db, auth } from '@/lib/firebase/config';
 import { toast } from 'sonner';
 import { useAuth } from '@/features/auth/AuthContext';
-
-export interface SettingOption { id: string; label: string; active: boolean; }
+import { Pencil, Trash2 } from 'lucide-react';
+import { formatCurrencyInput, normalizeSettingOptions, parseCurrencyInput } from '@/lib/commerce';
+import { SettingOption } from '@/types/store';
 
 export default function SettingsPage() {
     const [priceTables, setPriceTables] = useState<SettingOption[]>([]);
     const [paymentMethods, setPaymentMethods] = useState<SettingOption[]>([]);
     const [carriers, setCarriers] = useState<SettingOption[]>([]);
+    const [minimumOrderValue, setMinimumOrderValue] = useState('R$ 0,00');
     const [loading, setLoading] = useState(true);
+    const [savingMinimumOrder, setSavingMinimumOrder] = useState(false);
 
     const loadSettings = async () => {
         setLoading(true);
@@ -25,15 +28,23 @@ export default function SettingsPage() {
             const snap = await getDoc(docRef);
             if (snap.exists()) {
                 const data = snap.data();
-                setPriceTables(data.priceTables || []);
-                setPaymentMethods(data.paymentMethods || []);
-                setCarriers(data.carriers || []);
+                setPriceTables(normalizeSettingOptions(data.priceTables || []));
+                setPaymentMethods(normalizeSettingOptions(data.paymentMethods || []));
+                setCarriers(normalizeSettingOptions(data.carriers || []));
+                setMinimumOrderValue(
+                    formatCurrencyInput(String(Math.round(Number(data.minimumOrderValue || 0) * 100)))
+                );
             } else {
-                await setDoc(docRef, { priceTables: [], paymentMethods: [], carriers: [] });
+                await setDoc(docRef, {
+                    priceTables: [],
+                    paymentMethods: [],
+                    carriers: [],
+                    minimumOrderValue: 0,
+                });
             }
         } catch (error) {
             console.error(error);
-            toast.error("Erro ao carregar configurações");
+            toast.error('Erro ao carregar configurações');
         } finally {
             setLoading(false);
         }
@@ -51,10 +62,27 @@ export default function SettingsPage() {
             if (key === 'paymentMethods') setPaymentMethods(newOptions);
             if (key === 'carriers') setCarriers(newOptions);
 
-            toast.success("Configuração atualizada com sucesso!");
+            toast.success('Configuração atualizada com sucesso!');
         } catch (error) {
             console.error(error);
-            toast.error("Erro ao atualizar configuração");
+            toast.error('Erro ao atualizar configuração');
+        }
+    };
+
+    const handleSaveMinimumOrder = async () => {
+        setSavingMinimumOrder(true);
+        try {
+            await setDoc(
+                doc(db, 'settings', 'global'),
+                { minimumOrderValue: parseCurrencyInput(minimumOrderValue) },
+                { merge: true }
+            );
+            toast.success('Pedido mínimo padrão atualizado com sucesso!');
+        } catch (error) {
+            console.error(error);
+            toast.error('Erro ao atualizar pedido mínimo padrão.');
+        } finally {
+            setSavingMinimumOrder(false);
         }
     };
 
@@ -68,6 +96,31 @@ export default function SettingsPage() {
             </div>
 
             <ProfileSettings />
+
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-border space-y-4">
+                <div>
+                    <h3 className="text-lg font-semibold text-foreground border-b pb-2">Regras Comerciais</h3>
+                    <p className="mt-2 text-sm text-muted-foreground">
+                        Defina o pedido mínimo padrão usado quando o cliente não tiver uma regra específica.
+                    </p>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-[260px_auto] md:items-end">
+                    <div className="space-y-2">
+                        <Label>Pedido mínimo padrão</Label>
+                        <Input
+                            value={minimumOrderValue}
+                            onChange={(event) => setMinimumOrderValue(formatCurrencyInput(event.target.value))}
+                            placeholder="R$ 0,00"
+                        />
+                    </div>
+                    <div>
+                        <Button onClick={handleSaveMinimumOrder} disabled={savingMinimumOrder}>
+                            {savingMinimumOrder ? 'Salvando...' : 'Salvar regra'}
+                        </Button>
+                    </div>
+                </div>
+            </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                 <SettingSection
@@ -90,19 +143,51 @@ export default function SettingsPage() {
     );
 }
 
-function SettingSection({ title, options, onChange }: { title: string, options: SettingOption[], onChange: (opts: SettingOption[]) => void }) {
+function SettingSection({
+    title,
+    options,
+    onChange,
+}: {
+    title: string;
+    options: SettingOption[];
+    onChange: (opts: SettingOption[]) => void;
+}) {
     const [newLabel, setNewLabel] = useState('');
+    const [editingId, setEditingId] = useState('');
+    const [editingLabel, setEditingLabel] = useState('');
 
     const handleAdd = () => {
         if (!newLabel.trim()) return;
-        const newOpt = { id: Date.now().toString(), label: newLabel, active: true };
+        const newOpt = { id: Date.now().toString(), label: newLabel.trim(), active: true };
         onChange([...options, newOpt]);
         setNewLabel('');
     };
 
     const toggleStatus = (id: string) => {
-        const updated = options.map(opt => opt.id === id ? { ...opt, active: !opt.active } : opt);
+        const updated = options.map((opt) =>
+            opt.id === id ? { ...opt, active: !opt.active } : opt
+        );
         onChange(updated);
+    };
+
+    const startEditing = (option: SettingOption) => {
+        setEditingId(option.id);
+        setEditingLabel(option.label);
+    };
+
+    const saveEdit = () => {
+        if (!editingId || !editingLabel.trim()) return;
+        onChange(
+            options.map((option) =>
+                option.id === editingId ? { ...option, label: editingLabel.trim() } : option
+            )
+        );
+        setEditingId('');
+        setEditingLabel('');
+    };
+
+    const handleDelete = (id: string) => {
+        onChange(options.filter((option) => option.id !== id));
     };
 
     return (
@@ -110,12 +195,48 @@ function SettingSection({ title, options, onChange }: { title: string, options: 
             <h3 className="text-lg font-semibold text-foreground border-b pb-2">{title}</h3>
 
             <div className="space-y-2">
-                {options.map(opt => (
-                    <div key={opt.id} className="flex items-center justify-between p-2 hover:bg-muted/50 rounded border border-border">
-                        <span className={`text-sm ${!opt.active && 'line-through text-muted-foreground'}`}>{opt.label}</span>
-                        <Button variant="ghost" size="sm" onClick={() => toggleStatus(opt.id)}>
-                            {opt.active ? 'Desativar' : 'Ativar'}
-                        </Button>
+                {options.map((option) => (
+                    <div key={option.id} className="flex items-center justify-between gap-3 p-2 hover:bg-muted/50 rounded border border-border">
+                        <div className="flex-1">
+                            {editingId === option.id ? (
+                                <Input
+                                    value={editingLabel}
+                                    onChange={(event) => setEditingLabel(event.target.value)}
+                                    onKeyDown={(event) => {
+                                        if (event.key === 'Enter') {
+                                            event.preventDefault();
+                                            saveEdit();
+                                        }
+                                    }}
+                                />
+                            ) : (
+                                <span className={`text-sm ${!option.active && 'line-through text-muted-foreground'}`}>
+                                    {option.label}
+                                </span>
+                            )}
+                        </div>
+                        <div className="flex items-center gap-1">
+                            {editingId === option.id ? (
+                                <Button variant="ghost" size="sm" onClick={saveEdit}>
+                                    Salvar
+                                </Button>
+                            ) : (
+                                <Button variant="ghost" size="icon" onClick={() => startEditing(option)}>
+                                    <Pencil className="h-4 w-4" />
+                                </Button>
+                            )}
+                            <Button variant="ghost" size="sm" onClick={() => toggleStatus(option.id)}>
+                                {option.active ? 'Desativar' : 'Ativar'}
+                            </Button>
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                onClick={() => handleDelete(option.id)}
+                            >
+                                <Trash2 className="h-4 w-4" />
+                            </Button>
+                        </div>
                     </div>
                 ))}
                 {options.length === 0 && <p className="text-sm text-muted-foreground">Nenhum item cadastrado.</p>}
@@ -125,8 +246,13 @@ function SettingSection({ title, options, onChange }: { title: string, options: 
                 <Input
                     placeholder="Novo item..."
                     value={newLabel}
-                    onChange={e => setNewLabel(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && handleAdd()}
+                    onChange={(event) => setNewLabel(event.target.value)}
+                    onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                            event.preventDefault();
+                            handleAdd();
+                        }
+                    }}
                 />
                 <Button onClick={handleAdd}>Adicionar</Button>
             </div>
@@ -161,9 +287,14 @@ function ProfileSettings() {
             });
 
             toast.success("Perfil atualizado com sucesso!");
-        } catch (error: any) {
+        } catch (error: unknown) {
             console.error(error);
-            if (error?.code === 'auth/requires-recent-login') {
+            if (
+                typeof error === 'object' &&
+                error !== null &&
+                'code' in error &&
+                error.code === 'auth/requires-recent-login'
+            ) {
                 toast.error("Para alterar o e-mail, é necessário fazer logout e login novamente por motivos de segurança.");
             } else {
                 toast.error("Erro ao atualizar perfil. Verifique se o e-mail é válido.");

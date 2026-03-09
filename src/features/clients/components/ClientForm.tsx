@@ -14,7 +14,7 @@ import { EditableSelect } from '@/features/settings/components/EditableSelect';
 import { MaskedInput } from '@/components/ui/masked-input';
 import { fetchCnpjInfo } from '@/services/cnpj';
 import { Search, MessageCircle } from 'lucide-react';
-import { doc, updateDoc, arrayUnion, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase/config';
 
 const clientSchema = z.object({
@@ -32,14 +32,45 @@ const clientSchema = z.object({
     paymentMethod: z.string().optional(),
     carrier: z.string().optional(),
     creditLimit: z.number().min(0).optional(),
+    minimumOrderValue: z.number().min(0).optional(),
     notes: z.string().optional(),
+    password: z.string().optional(),
+    confirmPassword: z.string().optional(),
+    deliveryAddress: z.object({
+        cep: z.string().optional(),
+        street: z.string().optional(),
+        number: z.string().optional(),
+        district: z.string().optional(),
+        city: z.string().optional(),
+        uf: z.string().optional(),
+        complement: z.string().optional(),
+        reference: z.string().optional(),
+    }).optional(),
+}).superRefine((data, ctx) => {
+    if (data.password && data.password.length < 6) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['password'],
+            message: 'A senha deve ter pelo menos 6 caracteres',
+        });
+    }
+
+    if (data.password && data.password !== data.confirmPassword) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['confirmPassword'],
+            message: 'A confirmação da senha não confere',
+        });
+    }
 });
 
-type ClientFormValues = z.infer<typeof clientSchema>;
+export type ClientFormValues = z.infer<typeof clientSchema>;
 
 interface ClientFormProps {
     initialData?: Partial<ClientFormValues>;
     onSubmit: (data: ClientFormValues) => Promise<void>;
+    showAccessFields?: boolean;
+    requireAccessFields?: boolean;
     // Mocking settings data injects for the MVP
     settingsData: {
         priceTables: { id: string; label: string }[];
@@ -48,12 +79,18 @@ interface ClientFormProps {
     }
 }
 
-export function ClientForm({ initialData, onSubmit, settingsData }: ClientFormProps) {
+export function ClientForm({
+    initialData,
+    onSubmit,
+    settingsData,
+    showAccessFields = false,
+    requireAccessFields = false,
+}: ClientFormProps) {
     const [loadingCnpj, setLoadingCnpj] = useState(false);
     const [submitting, setSubmitting] = useState(false);
 
     // Modal state for dynamic settings addition
-    const [modalConfig, setModalConfig] = useState<{ isOpen: boolean, type: string, title: string }>({ isOpen: false, type: '', title: '' });
+    const [modalConfig, setModalConfig] = useState<{ isOpen: boolean, type: string, title: string, mode: 'create' | 'edit', currentOptionId?: string }>({ isOpen: false, type: '', title: '', mode: 'create' });
     const [modalInputValue, setModalInputValue] = useState('');
 
     const {
@@ -67,12 +104,24 @@ export function ClientForm({ initialData, onSubmit, settingsData }: ClientFormPr
         defaultValues: {
             status: 'ativo',
             creditLimit: 0,
+            minimumOrderValue: 0,
+            deliveryAddress: {
+                cep: '',
+                street: '',
+                number: '',
+                district: '',
+                city: '',
+                uf: '',
+                complement: '',
+                reference: '',
+            },
             ...initialData,
         },
     });
 
     const cnpjValue = watch('cnpj');
     const phoneValue = watch('phone');
+    const passwordValue = watch('password');
 
     const handleCnpjSearch = async () => {
         if (!cnpjValue || cnpjValue.length < 14) return;
@@ -101,24 +150,37 @@ export function ClientForm({ initialData, onSubmit, settingsData }: ClientFormPr
     const handleSaveNewItem = async () => {
         if (!modalInputValue.trim()) return;
 
-        // Determina o nome do campo baseado no type (priceTable -> priceTables)
         const fieldName = `${modalConfig.type}s`;
-        const newItem = { id: Date.now().toString(), label: modalInputValue.trim(), active: true };
 
         try {
             const docRef = doc(db, 'settings', 'global');
-            // Tenta pegar pra ver se doc existe, senao cria
             const snap = await getDoc(docRef);
+            const data = (snap.exists()
+                ? snap.data()
+                : { priceTables: [], paymentMethods: [], carriers: [] }) as Record<string, unknown>;
+
             if (!snap.exists()) {
                 await setDoc(docRef, { priceTables: [], paymentMethods: [], carriers: [] });
             }
 
-            await updateDoc(docRef, {
-                [fieldName]: arrayUnion(newItem)
-            });
+            const currentItems = Array.isArray(data[fieldName])
+                ? (data[fieldName] as Array<{ id: string; label: string; active?: boolean }>)
+                : [];
+            const updatedItems =
+                modalConfig.mode === 'edit' && modalConfig.currentOptionId
+                    ? currentItems.map((item) =>
+                        item.id === modalConfig.currentOptionId
+                            ? { ...item, label: modalInputValue.trim() }
+                            : item
+                    )
+                    : [...currentItems, { id: Date.now().toString(), label: modalInputValue.trim(), active: true }];
 
-            toast.success(`${modalInputValue} salvo nas configurações globais! Recarregue a página para atualizar.`);
-            setModalConfig({ isOpen: false, type: '', title: '' });
+            await setDoc(docRef, {
+                [fieldName]: updatedItems,
+            }, { merge: true });
+
+            toast.success('Configuração salva! Recarregue a página para refletir a lista atualizada.');
+            setModalConfig({ isOpen: false, type: '', title: '', mode: 'create' });
             setModalInputValue('');
 
         } catch (error) {
@@ -128,6 +190,11 @@ export function ClientForm({ initialData, onSubmit, settingsData }: ClientFormPr
     };
 
     const handleFormSubmit = async (data: ClientFormValues) => {
+        if (requireAccessFields && (!data.password || !data.confirmPassword)) {
+            toast.error('Defina e confirme a senha de acesso do cliente.');
+            return;
+        }
+
         setSubmitting(true);
         try {
             await onSubmit(data);
@@ -229,6 +296,46 @@ export function ClientForm({ initialData, onSubmit, settingsData }: ClientFormPr
                 </div>
             </div>
 
+            {showAccessFields && (
+                <div className="space-y-4">
+                    <h3 className="text-lg font-semibold text-foreground border-b pb-2">Acesso do Cliente</h3>
+                    {!requireAccessFields && (
+                        <p className="text-sm text-muted-foreground">
+                            Preencha para definir uma nova senha. Deixe em branco para manter a atual.
+                        </p>
+                    )}
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                            <Label>Senha de Acesso {requireAccessFields ? '*' : ''}</Label>
+                            <Input
+                                type="password"
+                                {...register('password')}
+                                placeholder="Mínimo de 6 caracteres"
+                            />
+                            {errors.password && <p className="text-xs text-destructive">{errors.password.message}</p>}
+                        </div>
+
+                        <div className="space-y-2">
+                            <Label>Confirmar Senha {requireAccessFields ? '*' : ''}</Label>
+                            <Input
+                                type="password"
+                                {...register('confirmPassword')}
+                                placeholder="Repita a senha"
+                            />
+                            {errors.confirmPassword && <p className="text-xs text-destructive">{errors.confirmPassword.message}</p>}
+                            {passwordValue && !errors.confirmPassword && (
+                                <p className="text-xs text-muted-foreground">
+                                    {requireAccessFields
+                                        ? 'Essa senha será usada pelo cliente para entrar na área dele.'
+                                        : 'Deixe em branco para manter a senha atual.'}
+                                </p>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* SEÇÃO 3: COMERCIAL & CONFIGURAÇÕES */}
             <div className="space-y-4">
                 <h3 className="text-lg font-semibold text-foreground border-b pb-2">Configurações Comerciais</h3>
@@ -248,8 +355,11 @@ export function ClientForm({ initialData, onSubmit, settingsData }: ClientFormPr
                         <EditableSelect
                             {...register('priceTableId')}
                             options={settingsData.priceTables}
-                            onAddNew={() => setModalConfig({ isOpen: true, type: 'priceTable', title: 'Nova Tabela de Preços' })}
-                            onEditSelected={(id, title) => toast.info(`Ação de editar: ${title}`)}
+                            onAddNew={() => setModalConfig({ isOpen: true, type: 'priceTable', title: 'Nova Tabela de Preços', mode: 'create' })}
+                            onEditSelected={(id, title) => {
+                                setModalConfig({ isOpen: true, type: 'priceTable', title: 'Editar Tabela de Preços', mode: 'edit', currentOptionId: id });
+                                setModalInputValue(title);
+                            }}
                         />
                         {errors.priceTableId && <p className="text-xs text-destructive">{errors.priceTableId.message}</p>}
                     </div>
@@ -259,8 +369,11 @@ export function ClientForm({ initialData, onSubmit, settingsData }: ClientFormPr
                         <EditableSelect
                             {...register('paymentMethod')}
                             options={settingsData.paymentMethods}
-                            onAddNew={() => setModalConfig({ isOpen: true, type: 'paymentMethod', title: 'Nova Forma de Pagamento' })}
-                            onEditSelected={(id, title) => toast.info(`Ação de editar: ${title}`)}
+                            onAddNew={() => setModalConfig({ isOpen: true, type: 'paymentMethod', title: 'Nova Forma de Pagamento', mode: 'create' })}
+                            onEditSelected={(id, title) => {
+                                setModalConfig({ isOpen: true, type: 'paymentMethod', title: 'Editar Forma de Pagamento', mode: 'edit', currentOptionId: id });
+                                setModalInputValue(title);
+                            }}
                         />
                     </div>
 
@@ -269,8 +382,11 @@ export function ClientForm({ initialData, onSubmit, settingsData }: ClientFormPr
                         <EditableSelect
                             {...register('carrier')}
                             options={settingsData.carriers}
-                            onAddNew={() => setModalConfig({ isOpen: true, type: 'carrier', title: 'Nova Transportadora' })}
-                            onEditSelected={(id, title) => toast.info(`Ação de editar: ${title}`)}
+                            onAddNew={() => setModalConfig({ isOpen: true, type: 'carrier', title: 'Nova Transportadora', mode: 'create' })}
+                            onEditSelected={(id, title) => {
+                                setModalConfig({ isOpen: true, type: 'carrier', title: 'Editar Transportadora', mode: 'edit', currentOptionId: id });
+                                setModalInputValue(title);
+                            }}
                         />
                     </div>
 
@@ -278,10 +394,62 @@ export function ClientForm({ initialData, onSubmit, settingsData }: ClientFormPr
                         <Label>Limite de Crédito (R$)</Label>
                         <Input type="number" step="0.01" {...register('creditLimit', { valueAsNumber: true })} />
                     </div>
+
+                    <div className="space-y-2">
+                        <Label>Pedido Mínimo do Cliente (R$)</Label>
+                        <Input type="number" step="0.01" min="0" {...register('minimumOrderValue', { valueAsNumber: true })} />
+                    </div>
                 </div>
             </div>
 
-            {/* SEÇÃO 4: OBSERVAÇÕES */}
+            {/* SEÇÃO 4: ENDEREÇO DE ENTREGA */}
+            <div className="space-y-4">
+                <h3 className="text-lg font-semibold text-foreground border-b pb-2">Endereço de Entrega</h3>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                        <Label>CEP de Entrega</Label>
+                        <MaskedInput mask="_____-___" {...register('deliveryAddress.cep')} placeholder="00000-000" />
+                    </div>
+
+                    <div className="space-y-2 md:col-span-2">
+                        <Label>Logradouro</Label>
+                        <Input {...register('deliveryAddress.street')} placeholder="Rua, avenida, rodovia..." />
+                    </div>
+
+                    <div className="space-y-2">
+                        <Label>Número</Label>
+                        <Input {...register('deliveryAddress.number')} placeholder="Número" />
+                    </div>
+
+                    <div className="space-y-2">
+                        <Label>Bairro</Label>
+                        <Input {...register('deliveryAddress.district')} placeholder="Bairro" />
+                    </div>
+
+                    <div className="space-y-2">
+                        <Label>Cidade</Label>
+                        <Input {...register('deliveryAddress.city')} placeholder="Cidade" />
+                    </div>
+
+                    <div className="space-y-2">
+                        <Label>UF</Label>
+                        <Input {...register('deliveryAddress.uf')} placeholder="UF" maxLength={2} />
+                    </div>
+
+                    <div className="space-y-2">
+                        <Label>Complemento</Label>
+                        <Input {...register('deliveryAddress.complement')} placeholder="Opcional" />
+                    </div>
+
+                    <div className="space-y-2">
+                        <Label>Referência</Label>
+                        <Input {...register('deliveryAddress.reference')} placeholder="Ponto de referência" />
+                    </div>
+                </div>
+            </div>
+
+            {/* SEÇÃO 5: OBSERVAÇÕES */}
             <div className="space-y-4">
                 <div className="space-y-2">
                     <Label>Observações Internas (Admin)</Label>
@@ -312,8 +480,13 @@ export function ClientForm({ initialData, onSubmit, settingsData }: ClientFormPr
                                 />
                             </div>
                             <div className="flex justify-end gap-2 pt-2">
-                                <Button type="button" variant="outline" onClick={() => setModalConfig({ isOpen: false, type: '', title: '' })}>Cancelar</Button>
-                                <Button type="button" onClick={handleSaveNewItem}>Salvar Opção</Button>
+                                <Button type="button" variant="outline" onClick={() => {
+                                    setModalConfig({ isOpen: false, type: '', title: '', mode: 'create' });
+                                    setModalInputValue('');
+                                }}>Cancelar</Button>
+                                <Button type="button" onClick={handleSaveNewItem}>
+                                    {modalConfig.mode === 'edit' ? 'Salvar Edição' : 'Salvar Opção'}
+                                </Button>
                             </div>
                         </div>
                     </div>

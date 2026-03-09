@@ -2,13 +2,16 @@
 
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/features/auth/AuthContext';
-import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '@/lib/firebase/config';
 import Link from 'next/link';
+import { ArrowLeft } from 'lucide-react';
+import { OrderRecord } from '@/types/store';
+import { getOrderSubtotal } from '@/lib/commerce';
 
 export default function ClientOrdersPage() {
     const { user } = useAuth();
-    const [orders, setOrders] = useState<any[]>([]);
+    const [orders, setOrders] = useState<OrderRecord[]>([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
@@ -22,10 +25,10 @@ export default function ClientOrdersPage() {
                 );
 
                 const snap = await getDocs(q);
-                let fetchedOrders: any[] = [];
+                const fetchedOrders: OrderRecord[] = [];
                 snap.forEach(doc => {
-                    const data = doc.data();
-                    const fallbackSubtotal = (data.items || []).reduce((acc: number, item: any) => acc + (item.total || (item.unitPrice * item.quantity) || 0), 0);
+                    const data = doc.data() as Omit<OrderRecord, 'id'>;
+                    const fallbackSubtotal = getOrderSubtotal(data.items || []);
                     const docSubtotal = data.subtotal || fallbackSubtotal;
                     const docFreight = data.freight || 0;
                     const docTotal = docSubtotal + docFreight;
@@ -40,7 +43,9 @@ export default function ClientOrdersPage() {
                 });
 
                 // Client-side sorting because Firestore requires composite index for where+orderBy
-                fetchedOrders.sort((a, b) => b.createdAt?.seconds - a.createdAt?.seconds);
+                fetchedOrders.sort(
+                    (a, b) => (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0)
+                );
 
                 setOrders(fetchedOrders);
             } catch (err) {
@@ -71,8 +76,12 @@ export default function ClientOrdersPage() {
                     <h2 className="text-2xl font-bold tracking-tight">Meus Pedidos</h2>
                     <p className="text-muted-foreground">Acompanhe o status e histórico de suas compras.</p>
                 </div>
-                <Link href="/app" className="text-primary text-sm hover:underline">
-                    &larr; Voltar para loja
+                <Link
+                    href="/app"
+                    className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition hover:border-primary/40 hover:bg-primary/5 hover:text-primary"
+                >
+                    <ArrowLeft className="h-4 w-4" />
+                    Voltar para loja
                 </Link>
             </div>
 
@@ -88,11 +97,15 @@ export default function ClientOrdersPage() {
             ) : (
                 <div className="space-y-4">
                     {orders.map(order => (
-                        <div key={order.id} className="bg-white p-6 rounded-xl border border-border flex flex-col md:flex-row justify-between gap-4 md:items-center">
+                        <Link key={order.id} href={`/app/orders/${order.id}`} className="block">
+                        <div className="bg-white p-6 rounded-xl border border-border flex flex-col md:flex-row justify-between gap-4 md:items-center transition-colors hover:border-primary/40">
                             <div>
                                 <h3 className="font-bold text-lg">Pedido #{order.id.slice(0, 8).toUpperCase()}</h3>
                                 <p className="text-sm text-muted-foreground">
                                     Realizado em: {order.createdAt ? new Date(order.createdAt.seconds * 1000).toLocaleDateString('pt-BR') : 'N/A'}
+                                </p>
+                                <p className="text-sm text-muted-foreground">
+                                    Transportadora: {order.carrier || 'A definir'} | Prazo: {order.deliveryLeadTime || 'A definir'}
                                 </p>
                             </div>
 
@@ -113,6 +126,7 @@ export default function ClientOrdersPage() {
                                 </div>
                             </div>
                         </div>
+                        </Link>
                     ))}
                 </div>
             )}

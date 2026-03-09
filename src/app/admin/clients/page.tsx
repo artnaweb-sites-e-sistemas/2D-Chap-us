@@ -3,8 +3,8 @@
 import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import Link from 'next/link';
-import { collection, getDocs, query, where, deleteDoc, doc } from 'firebase/firestore';
-import { db } from '@/lib/firebase/config';
+import { collection, getDocs, query, where } from 'firebase/firestore';
+import { db, auth } from '@/lib/firebase/config';
 import { toast } from 'sonner';
 
 interface ClientData {
@@ -54,10 +54,28 @@ export default function ClientsPage() {
     }, []);
 
     const handleDelete = async (id: string, name: string) => {
-        if (!confirm(`Tem certeza que deseja excluir o cliente "${name}"?`)) return;
+        if (!confirm(`Tem certeza que deseja excluir o cliente "${name}"? A conta de acesso ao sistema também será removida.`)) return;
+
+        const token = await auth.currentUser?.getIdToken();
+        if (!token) {
+            toast.error("Sessão expirada. Faça login novamente.");
+            return;
+        }
 
         try {
-            await deleteDoc(doc(db, 'clients', id));
+            const res = await fetch('/api/admin/delete-client', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${token}`,
+                },
+                body: JSON.stringify({ clientId: id }),
+            });
+            const json = await res.json();
+            if (!res.ok) {
+                toast.error(json.error || "Erro ao excluir cliente.");
+                return;
+            }
             toast.success(`Cliente "${name}" excluído com sucesso.`);
             setClients(prev => prev.filter(c => c.id !== id));
         } catch (error) {

@@ -9,6 +9,8 @@ import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase/config';
 import { useAuth } from '@/features/auth/AuthContext';
 import { toast } from 'sonner';
+import { getOrderSubtotal, normalizeSettingOptions } from '@/lib/commerce';
+import { OrderHistoryEntry, OrderRecord, OrderItemRecord, SettingOption } from '@/types/store';
 
 export default function OrderDetailsPage({ params }: { params: Promise<{ id: string }> }) {
     return (
@@ -21,9 +23,12 @@ export default function OrderDetailsPage({ params }: { params: Promise<{ id: str
 function OrderDetailsContent({ paramsPromise }: { paramsPromise: Promise<{ id: string }> }) {
     const params = use(paramsPromise);
     const { user } = useAuth();
-    const [order, setOrder] = useState<any>(null);
+    const [order, setOrder] = useState<OrderRecord | null>(null);
     const [status, setStatus] = useState('novo');
     const [loading, setLoading] = useState(true);
+    const [carriers, setCarriers] = useState<SettingOption[]>([]);
+    const [deliveryLeadTime, setDeliveryLeadTime] = useState('');
+    const [carrier, setCarrier] = useState('');
 
     const [isEditingFreight, setIsEditingFreight] = useState(false);
     const [editFreightVal, setEditFreightVal] = useState('');
@@ -31,12 +36,22 @@ function OrderDetailsContent({ paramsPromise }: { paramsPromise: Promise<{ id: s
     useEffect(() => {
         const fetchOrder = async () => {
             try {
-                const snap = await getDoc(doc(db, 'orders', params.id));
-                if (snap.exists()) {
-                    const data = snap.data();
-                    setOrder(data);
+                const [orderSnap, settingsSnap] = await Promise.all([
+                    getDoc(doc(db, 'orders', params.id)),
+                    getDoc(doc(db, 'settings', 'global')),
+                ]);
+
+                if (settingsSnap.exists()) {
+                    setCarriers(normalizeSettingOptions(settingsSnap.data().carriers || []));
+                }
+
+                if (orderSnap.exists()) {
+                    const data = orderSnap.data() as Omit<OrderRecord, 'id'>;
+                    setOrder({ id: orderSnap.id, ...data });
                     setStatus(data.status || 'novo');
                     setEditFreightVal(data.freight ? data.freight.toString() : '');
+                    setDeliveryLeadTime(data.deliveryLeadTime || '');
+                    setCarrier(data.carrier || '');
                 } else {
                     toast.error("Pedido não encontrado");
                 }
@@ -53,7 +68,7 @@ function OrderDetailsContent({ paramsPromise }: { paramsPromise: Promise<{ id: s
     const handleUpdateStatus = async () => {
         if (!order) return;
         try {
-            const newHistory = [
+            const newHistory: OrderHistoryEntry[] = [
                 ...(order.history || []),
                 { status, changedBy: user?.name || user?.email || 'Admin', timestamp: new Date().toISOString() }
             ];
@@ -69,14 +84,41 @@ function OrderDetailsContent({ paramsPromise }: { paramsPromise: Promise<{ id: s
         }
     };
 
+    const handleSaveLogistics = async () => {
+        if (!order) return;
+
+        try {
+            const newHistory: OrderHistoryEntry[] = [
+                ...(order.history || []),
+                {
+                    status: `Logística atualizada: ${carrier || 'Sem transportadora'} / ${deliveryLeadTime || 'Prazo não informado'}`,
+                    changedBy: user?.name || user?.email || 'Admin',
+                    timestamp: new Date().toISOString(),
+                },
+            ];
+
+            await updateDoc(doc(db, 'orders', params.id), {
+                carrier,
+                deliveryLeadTime,
+                history: newHistory,
+            });
+
+            setOrder({ ...order, carrier, deliveryLeadTime, history: newHistory });
+            toast.success('Transportadora e prazo atualizados com sucesso!');
+        } catch (error) {
+            console.error(error);
+            toast.error('Erro ao atualizar as informações logísticas.');
+        }
+    };
+
     const handleSaveFreight = async () => {
         if (!order) return;
         const newFreight = parseFloat(editFreightVal.replace(',', '.')) || 0;
-        const subtotal = order.subtotal || (order.items || []).reduce((acc: number, item: any) => acc + (item.total || (item.unitPrice * item.quantity) || 0), 0);
+        const subtotal = order.subtotal || getOrderSubtotal(order.items || []);
         const newTotal = subtotal + newFreight;
 
         try {
-            const newHistory = [
+            const newHistory: OrderHistoryEntry[] = [
                 ...(order.history || []),
                 { status: `Frete alterado para R$ ${newFreight.toFixed(2).replace('.', ',')}`, changedBy: user?.name || user?.email || 'Admin', timestamp: new Date().toISOString() }
             ];
@@ -99,7 +141,7 @@ function OrderDetailsContent({ paramsPromise }: { paramsPromise: Promise<{ id: s
 
     const formatCurrency = (val: number) => `R$ ${(val || 0).toFixed(2).replace('.', ',')}`;
 
-    const computedSubtotal = order.subtotal || (order.items || []).reduce((acc: number, item: any) => acc + (item.total || (item.unitPrice * item.quantity) || 0), 0);
+    const computedSubtotal = order.subtotal || getOrderSubtotal(order.items || []);
     const computedTotal = computedSubtotal + (order.freight || 0);
 
     return (
@@ -131,10 +173,16 @@ function OrderDetailsContent({ paramsPromise }: { paramsPromise: Promise<{ id: s
                     <div className="bg-white p-6 rounded-xl border border-border">
                         <h3 className="font-semibold border-b pb-4 mb-4">Itens do Pedido</h3>
                         <div className="space-y-4">
-                            {(order.items || []).map((item: any, i: number) => (
+                            {(order.items || []).map((item: OrderItemRecord, i: number) => (
                                 <div key={i} className="flex justify-between items-center bg-muted/50 p-3 rounded border border-border">
                                     <div>
                                         <p className="font-medium">{item.name}</p>
+                                        {item.variationName && (
+                                            <p className="text-xs text-muted-foreground">Variação: {item.variationName}</p>
+                                        )}
+                                        {item.sku && (
+                                            <p className="text-xs text-muted-foreground">SKU: {item.sku}</p>
+                                        )}
                                         <p className="text-sm text-muted-foreground">Qtd: {item.quantity} | {formatCurrency(item.unitPrice)} un.</p>
                                     </div>
                                     <div className="font-bold">
@@ -162,10 +210,26 @@ function OrderDetailsContent({ paramsPromise }: { paramsPromise: Promise<{ id: s
 
                     <div className="bg-white p-6 rounded-xl border border-border">
                         <h3 className="font-semibold border-b pb-4 mb-4">Observações e Transporte</h3>
-                        <div className="grid grid-cols-2 gap-4 text-sm">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                             <div>
-                                <span className="block text-muted-foreground">CEP Destino</span>
-                                <strong className="block mt-1">{order.cep || 'Não informado'}</strong>
+                                <span className="block text-muted-foreground">Transportadora</span>
+                                <Select value={carrier} onChange={(event) => setCarrier(event.target.value)} className="mt-1">
+                                    <option value="">Selecione...</option>
+                                    {carriers.map((carrierOption) => (
+                                        <option key={carrierOption.id} value={carrierOption.label}>
+                                            {carrierOption.label}
+                                        </option>
+                                    ))}
+                                </Select>
+                            </div>
+                            <div>
+                                <span className="block text-muted-foreground">Prazo atrelado ao pedido</span>
+                                <Input
+                                    value={deliveryLeadTime}
+                                    onChange={(event) => setDeliveryLeadTime(event.target.value)}
+                                    className="mt-1"
+                                    placeholder="Ex: 7 dias úteis"
+                                />
                             </div>
                             <div>
                                 <span className="block text-muted-foreground">Frete Informado</span>
@@ -195,11 +259,31 @@ function OrderDetailsContent({ paramsPromise }: { paramsPromise: Promise<{ id: s
                                     )}
                                 </div>
                             </div>
-                            <div className="col-span-2 mt-4">
+                            <div>
+                                <span className="block text-muted-foreground">Endereço de entrega</span>
+                                {order.deliveryAddress ? (
+                                    <div className="mt-1 rounded border border-border bg-muted/30 p-3 text-sm leading-6">
+                                        <p>{order.deliveryAddress.street || 'Logradouro não informado'} {order.deliveryAddress.number || ''}</p>
+                                        <p>{order.deliveryAddress.district || 'Bairro não informado'}</p>
+                                        <p>{order.deliveryAddress.city || 'Cidade não informada'} - {order.deliveryAddress.uf || '--'}</p>
+                                        <p>CEP: {order.deliveryAddress.cep || 'Não informado'}</p>
+                                        {order.deliveryAddress.complement && <p>Compl.: {order.deliveryAddress.complement}</p>}
+                                        {order.deliveryAddress.reference && <p>Ref.: {order.deliveryAddress.reference}</p>}
+                                    </div>
+                                ) : (
+                                    <p className="mt-1 text-muted-foreground italic">Nenhum endereço de entrega atrelado.</p>
+                                )}
+                            </div>
+                            <div className="col-span-full flex justify-end">
+                                <Button variant="outline" onClick={handleSaveLogistics}>
+                                    Salvar logística
+                                </Button>
+                            </div>
+                            <div className="col-span-full mt-2">
                                 <span className="block text-muted-foreground">Anotações do Cliente</span>
                                 {order.observations ? (
                                     <p className="mt-1 p-3 bg-yellow-50 text-yellow-800 rounded border border-yellow-200">
-                                        "{order.observations}"
+                                        &quot;{order.observations}&quot;
                                     </p>
                                 ) : (
                                     <p className="mt-1 text-muted-foreground italic">Nenhuma observação.</p>
@@ -214,7 +298,7 @@ function OrderDetailsContent({ paramsPromise }: { paramsPromise: Promise<{ id: s
                         <h3 className="font-semibold border-b pb-4 mb-4">Histórico (Log)</h3>
                         <div className="relative pl-4 border-l-2 border-border space-y-6">
 
-                            {order.history && order.history.map((hist: any, index: number) => (
+                            {order.history && order.history.map((hist: OrderHistoryEntry, index: number) => (
                                 <div key={index} className="relative">
                                     <div className="absolute -left-[21px] top-1 h-3 w-3 rounded-full bg-slate-300 ring-4 ring-white" />
                                     <p className="text-sm font-medium capitalize">Status: {hist.status.replace('_', ' ')}</p>

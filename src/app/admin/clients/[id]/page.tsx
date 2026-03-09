@@ -9,6 +9,8 @@ import { toast } from 'sonner';
 import { ClientForm } from '@/features/clients/components/ClientForm';
 import { KeyRound } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { ClientProfile } from '@/types/store';
+import { ClientFormValues } from '@/features/clients/components/ClientForm';
 
 export default function EditClientPage({ params }: { params: Promise<{ id: string }> }) {
     return (
@@ -22,7 +24,7 @@ function EditClientContent({ paramsPromise }: { paramsPromise: Promise<{ id: str
     const params = use(paramsPromise);
     const router = useRouter();
 
-    const [clientData, setClientData] = useState<any>(null);
+    const [clientData, setClientData] = useState<Partial<ClientProfile> | null>(null);
     const [settings, setSettings] = useState({
         priceTables: [],
         paymentMethods: [],
@@ -65,10 +67,40 @@ function EditClientContent({ paramsPromise }: { paramsPromise: Promise<{ id: str
         fetchAll();
     }, [params.id, router]);
 
-    const handleSave = async (data: any) => {
+    const handleSave = async (data: ClientFormValues) => {
         try {
+            const clientFormData = { ...data };
+            const password = clientFormData.password;
+            delete clientFormData.password;
+            delete clientFormData.confirmPassword;
+
+            // Se o admin informou nova senha, atualizar via API (Firebase Admin)
+            if (password && password.length >= 6 && clientData?.email) {
+                const token = await auth.currentUser?.getIdToken();
+                if (!token) {
+                    toast.error("Sessão expirada. Faça login novamente.");
+                    return;
+                }
+                const res = await fetch('/api/admin/update-client-password', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${token}`,
+                    },
+                    body: JSON.stringify({
+                        email: clientData.email,
+                        newPassword: password,
+                    }),
+                });
+                const json = await res.json();
+                if (!res.ok) {
+                    toast.error(json.error || 'Erro ao atualizar senha.');
+                    return;
+                }
+            }
+
             await updateDoc(doc(db, 'clients', params.id), {
-                ...data,
+                ...clientFormData,
                 updatedAt: new Date()
             });
 
@@ -93,7 +125,7 @@ function EditClientContent({ paramsPromise }: { paramsPromise: Promise<{ id: str
         try {
             await sendPasswordResetEmail(auth, clientData.email);
             toast.success("Link de redefinição de senha enviado para o e-mail do cliente!");
-        } catch (error: any) {
+        } catch (error: unknown) {
             console.error("Error sending reset email:", error);
             toast.error("Erro ao enviar link. Verifique se o e-mail está associado a uma conta ativa no sistema.");
         }
@@ -115,14 +147,25 @@ function EditClientContent({ paramsPromise }: { paramsPromise: Promise<{ id: str
                     </p>
                 </div>
                 {clientData?.email && (
-                    <Button variant="outline" className="flex items-center gap-2" onClick={handleResetPassword}>
-                        <KeyRound className="w-4 h-4" />
-                        Redefinir Senha
-                    </Button>
+                    <div className="flex flex-col items-end gap-1">
+                        <Button variant="outline" className="flex items-center gap-2" onClick={handleResetPassword}>
+                            <KeyRound className="w-4 h-4" />
+                            Enviar link por e-mail
+                        </Button>
+                        <span className="text-xs text-muted-foreground">
+                            Se o link não chegar, use os campos de senha abaixo.
+                        </span>
+                    </div>
                 )}
             </div>
 
-            <ClientForm onSubmit={handleSave} settingsData={settings} initialData={clientData} />
+            <ClientForm
+                onSubmit={handleSave}
+                settingsData={settings}
+                initialData={clientData}
+                showAccessFields
+                requireAccessFields={false}
+            />
         </div>
     );
 }

@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useAuth } from '@/features/auth/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import Link from 'next/link';
@@ -9,36 +8,49 @@ import { ShoppingCart, Search } from 'lucide-react';
 import { collection, getDocs } from 'firebase/firestore';
 import { db } from '@/lib/firebase/config';
 import { useCartStore } from '@/store/useCartStore';
+import { ProductRecord } from '@/types/store';
+import { normalizeProduct } from '@/lib/commerce';
+import { StoreProductCard } from '@/features/storefront/components/StoreProductCard';
 
-interface Product {
+interface Category {
     id: string;
     name: string;
-    description?: string;
-    categoryId?: string;
-    basePrice: number;
-    minQuantity: number;
-    multiple: number;
-    images?: string[];
+    subcategories: string[];
 }
 
 export default function ClientPortalDashboard() {
-    const { user } = useAuth();
     const [searchTerm, setSearchTerm] = useState('');
-    const [products, setProducts] = useState<Product[]>([]);
+    const [products, setProducts] = useState<ProductRecord[]>([]);
+    const [categories, setCategories] = useState<Category[]>([]);
+    const [selectedCategoryId, setSelectedCategoryId] = useState('');
+    const [selectedSubcategory, setSelectedSubcategory] = useState('');
     const [loading, setLoading] = useState(true);
 
     const items = useCartStore((state) => state.items);
     const cartCount = items.reduce((acc, current) => acc + current.qtde, 0);
 
     useEffect(() => {
-        const fetchProducts = async () => {
+        const fetchStorefrontData = async () => {
             try {
-                const querySnapshot = await getDocs(collection(db, 'products'));
-                const fetchedProducts: Product[] = [];
-                querySnapshot.forEach((doc) => {
-                    fetchedProducts.push({ id: doc.id, ...doc.data() } as Product);
-                });
+                const [productSnapshot, categorySnapshot] = await Promise.all([
+                    getDocs(collection(db, 'products')),
+                    getDocs(collection(db, 'categories')),
+                ]);
+
+                const fetchedProducts = productSnapshot.docs
+                    .map((doc) => normalizeProduct(doc.id, doc.data()))
+                    .filter((product) => product.status !== 'inativo');
+
+                const fetchedCategories = categorySnapshot.docs.map((doc) => ({
+                    id: doc.id,
+                    name: String(doc.data().name || ''),
+                    subcategories: Array.isArray(doc.data().subcategories)
+                        ? doc.data().subcategories
+                        : [],
+                }));
+
                 setProducts(fetchedProducts);
+                setCategories(fetchedCategories);
             } catch (err) {
                 console.error("Error fetching products", err);
             } finally {
@@ -46,10 +58,26 @@ export default function ClientPortalDashboard() {
             }
         };
 
-        fetchProducts();
+        fetchStorefrontData();
     }, []);
 
-    const filtered = products.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()));
+    const categoryMap = categories.reduce<Record<string, Category>>((acc, category) => {
+        acc[category.id] = category;
+        return acc;
+    }, {});
+
+    const featuredProducts = products.slice(0, 2);
+
+    const filtered = products.filter((product) => {
+        const matchesSearch =
+            product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            product.description?.toLowerCase().includes(searchTerm.toLowerCase());
+
+        const matchesCategory = !selectedCategoryId || product.categoryId === selectedCategoryId;
+        const matchesSubcategory = !selectedSubcategory || product.subcategoryId === selectedSubcategory;
+
+        return matchesSearch && matchesCategory && matchesSubcategory;
+    });
 
     return (
         <div className="space-y-8">
@@ -86,96 +114,118 @@ export default function ClientPortalDashboard() {
             {loading ? (
                 <div className="text-center py-10 text-muted-foreground">Carregando catálogo...</div>
             ) : (
-                <>
-                    {/* Recomendados - Just taking the first 2 as an MVP example */}
-                    {products.length >= 2 && (
-                        <div className="space-y-4 rounded-xl bg-primary/10 p-6 border border-primary/20">
-                            <h3 className="text-lg font-semibold text-primary">Recomendados para você</h3>
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                <ProductCard product={products[0]} isFeatured />
-                                <ProductCard product={products[1]} isFeatured />
-                            </div>
-                        </div>
-                    )}
-
-                    <div className="space-y-4">
-                        <h3 className="text-lg font-semibold text-foreground">Todos os Produtos</h3>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                            {filtered.map(product => (
-                                <ProductCard key={product.id} product={product} />
-                            ))}
-                            {filtered.length === 0 && (
-                                <p className="col-span-full text-muted-foreground py-8 text-center">Nenhum produto encontrado.</p>
+                <div className="grid gap-8 lg:grid-cols-[260px_minmax(0,1fr)]">
+                    <aside className="space-y-4 rounded-xl border border-border bg-card p-4 h-fit">
+                        <div className="flex items-center justify-between">
+                            <h3 className="font-semibold text-foreground">Categorias</h3>
+                            {(selectedCategoryId || selectedSubcategory) && (
+                                <button
+                                    className="text-xs text-primary hover:underline"
+                                    onClick={() => {
+                                        setSelectedCategoryId('');
+                                        setSelectedSubcategory('');
+                                    }}
+                                >
+                                    Limpar filtros
+                                </button>
                             )}
                         </div>
+
+                        <div className="space-y-2">
+                            <button
+                                className={`w-full rounded-lg border px-3 py-2 text-left text-sm ${
+                                    !selectedCategoryId ? 'border-primary bg-primary/5 text-primary' : 'border-border'
+                                }`}
+                                onClick={() => {
+                                    setSelectedCategoryId('');
+                                    setSelectedSubcategory('');
+                                }}
+                            >
+                                Todas as categorias
+                            </button>
+
+                            {categories.map((category) => (
+                                <div key={category.id} className="rounded-lg border border-border p-2">
+                                    <button
+                                        className={`w-full rounded-md px-3 py-2 text-left text-sm font-medium ${
+                                            selectedCategoryId === category.id
+                                                ? 'bg-primary/10 text-primary'
+                                                : 'hover:bg-muted'
+                                        }`}
+                                        onClick={() => {
+                                            setSelectedCategoryId(category.id);
+                                            setSelectedSubcategory('');
+                                        }}
+                                    >
+                                        {category.name}
+                                    </button>
+
+                                    {selectedCategoryId === category.id && category.subcategories.length > 0 && (
+                                        <div className="mt-2 space-y-1 border-t border-border pt-2">
+                                            {category.subcategories.map((subcategory) => (
+                                                <button
+                                                    key={subcategory}
+                                                    className={`w-full rounded-md px-3 py-2 text-left text-sm ${
+                                                        selectedSubcategory === subcategory
+                                                            ? 'bg-muted font-medium text-foreground'
+                                                            : 'text-muted-foreground hover:bg-muted/60'
+                                                    }`}
+                                                    onClick={() => setSelectedSubcategory(subcategory)}
+                                                >
+                                                    {subcategory}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    </aside>
+
+                    <div className="space-y-6">
+                        {featuredProducts.length >= 2 && !selectedCategoryId && !searchTerm && (
+                            <div className="space-y-4 rounded-xl bg-primary/10 p-6 border border-primary/20">
+                                <h3 className="text-lg font-semibold text-primary">Recomendados para você</h3>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    {featuredProducts.map((product) => (
+                                        <StoreProductCard
+                                            key={product.id}
+                                            product={product}
+                                            categoryName={categoryMap[product.categoryId || '']?.name}
+                                            subcategoryName={product.subcategoryId}
+                                            isFeatured
+                                        />
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="space-y-4">
+                            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                                <h3 className="text-lg font-semibold text-foreground">Todos os Produtos</h3>
+                                <p className="text-sm text-muted-foreground">
+                                    {filtered.length} produto(s) encontrado(s)
+                                </p>
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6">
+                                {filtered.map((product) => (
+                                    <StoreProductCard
+                                        key={product.id}
+                                        product={product}
+                                        categoryName={categoryMap[product.categoryId || '']?.name}
+                                        subcategoryName={product.subcategoryId}
+                                    />
+                                ))}
+                                {filtered.length === 0 && (
+                                    <p className="col-span-full text-muted-foreground py-8 text-center">
+                                        Nenhum produto encontrado.
+                                    </p>
+                                )}
+                            </div>
+                        </div>
                     </div>
-                </>
+                </div>
             )}
-        </div>
-    );
-}
-
-function ProductCard({ product, isFeatured = false }: { product: Product, isFeatured?: boolean }) {
-    const addItem = useCartStore((state) => state.addItem);
-    const [qtde, setQtde] = useState(product.minQuantity || 1);
-
-    const handleAdd = () => {
-        if (qtde < (product.minQuantity || 1)) {
-            alert(`Quantidade mínima é ${product.minQuantity || 1}`);
-            return;
-        }
-        if (product.multiple && qtde % product.multiple !== 0) {
-            alert(`Este produto é vendido em múltiplos de ${product.multiple}`);
-            return;
-        }
-
-        addItem({
-            id: product.id,
-            name: product.name,
-            price: product.basePrice,
-            qtde: qtde,
-            minQt: product.minQuantity || 1,
-            multiple: product.multiple || 1,
-            imageUrl: product.images?.[0]
-        });
-
-    };
-
-    return (
-        <div className={`bg-card rounded-xl border ${isFeatured ? 'border-primary/30 shadow-md' : 'border-border shadow-sm'} overflow-hidden flex flex-col`}>
-            <div className="aspect-square bg-muted flex flex-col items-center justify-center text-muted-foreground overflow-hidden">
-                {product.images && product.images[0] ? (
-                    <img src={product.images[0]} alt={product.name} className="w-full h-full object-cover" />
-                ) : (
-                    <span className="text-sm">Sem Foto</span>
-                )}
-            </div>
-            <div className="p-4 flex flex-col flex-1">
-                <h4 className="font-medium text-foreground line-clamp-2 min-h-[40px] mt-1">{product.name}</h4>
-
-                <div className="mt-4 mb-4 flex items-end justify-between">
-                    <div>
-                        <p className="text-sm text-muted-foreground">Unidade</p>
-                        <p className="text-lg font-bold text-foreground">R$ {(product.basePrice || 0).toFixed(2).replace('.', ',')}</p>
-                    </div>
-                    <div className="text-right">
-                        <p className="text-xs text-muted-foreground">Venda min: {product.minQuantity || 1}</p>
-                        <p className="text-xs text-muted-foreground">Múltiplo: {product.multiple || 1}</p>
-                    </div>
-                </div>
-
-                <div className="mt-auto pt-4 border-t border-border flex gap-2">
-                    <Input
-                        type="number"
-                        min={product.minQuantity || 1}
-                        step={product.multiple || 1}
-                        value={qtde}
-                        onChange={e => setQtde(Number(e.target.value))}
-                        className="w-20"
-                    />
-                    <Button onClick={handleAdd} className="flex-1">Adicionar</Button>
-                </div>
-            </div>
         </div>
     );
 }
