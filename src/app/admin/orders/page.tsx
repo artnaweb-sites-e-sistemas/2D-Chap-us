@@ -325,7 +325,7 @@ function OrdersContent() {
             ) : viewMode === 'kanban' ? (
                 <div
                     ref={scrollRef}
-                    className="flex-1 overflow-x-auto pb-4 no-scrollbar cursor-grab active:cursor-grabbing"
+                    className="flex-1 overflow-x-auto pb-4 cursor-grab active:cursor-grabbing"
                     onMouseDown={handleMouseDown}
                     onMouseLeave={handleMouseLeave}
                     onMouseUp={handleMouseUp}
@@ -335,7 +335,7 @@ function OrdersContent() {
                         {(statusFilter ? COLUMNS.filter(c => c.id === statusFilter) : COLUMNS).map(col => (
                             <div
                                 key={col.id}
-                                className={`w-[320px] rounded-xl p-4 flex flex-col gap-3 border ${col.color}`}
+                                className={`w-[320px] rounded-xl p-4 flex flex-col gap-3 border ${col.color} min-h-0`}
                                 onDragOver={handleDragOver}
                                 onDrop={(e) => handleDrop(e, col.id)}
                             >
@@ -346,7 +346,7 @@ function OrdersContent() {
                                     </span>
                                 </h3>
 
-                                <div className="flex-1 space-y-3">
+                                <div className="flex-1 space-y-3 pb-1 overflow-y-auto pr-1">
                                     {filteredOrders.filter(o => o.status === col.id).map(order => (
                                         <div
                                             key={order.id}

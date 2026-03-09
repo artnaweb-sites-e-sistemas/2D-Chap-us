@@ -3,9 +3,10 @@
 import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import Link from 'next/link';
-import { collection, getDocs, deleteDoc, doc } from 'firebase/firestore';
+import { collection, getDocs, deleteDoc, doc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase/config';
 import { toast } from 'sonner';
+import { deleteImagesByUrl } from '@/lib/firebase/storageCleanup';
 
 interface ProductData {
     id: string;
@@ -60,7 +61,28 @@ export default function ProductsPage() {
         if (!confirm(`Tem certeza que deseja excluir o produto "${name}"?`)) return;
 
         try {
-            await deleteDoc(doc(db, 'products', id));
+            const productRef = doc(db, 'products', id);
+            const snap = await getDoc(productRef);
+
+            if (snap.exists()) {
+                const data = snap.data() as any;
+                const urls = new Set<string>();
+
+                (data.images || []).forEach((u: string) => urls.add(u));
+                (data.variants || []).forEach((variant: any) => {
+                    const vUrls: string[] = [
+                        ...(variant.imageUrls || []),
+                        ...(variant.imageUrl ? [variant.imageUrl] : []),
+                    ];
+                    vUrls.forEach((u) => urls.add(u));
+                });
+
+                if (urls.size > 0) {
+                    await deleteImagesByUrl(Array.from(urls));
+                }
+            }
+
+            await deleteDoc(productRef);
             toast.success(`Baixa do produto "${name}" realizada.`);
             setProducts(prev => prev.filter(p => p.id !== id));
         } catch (error) {

@@ -14,6 +14,7 @@ import { db, storage } from '@/lib/firebase/config';
 import { normalizeProduct } from '@/lib/commerce';
 import { VariationBuilder } from '@/features/products/components/VariationBuilder';
 import { ProductVariationGroup, ProductVariant } from '@/types/store';
+import { deleteImagesByUrl } from '@/lib/firebase/storageCleanup';
 
 export default function EditProductPage({ params }: { params: Promise<{ id: string }> }) {
     return (
@@ -41,6 +42,7 @@ function EditProductContent({ paramsPromise }: { paramsPromise: Promise<{ id: st
 
     const [categories, setCategories] = useState<{ id: string, name: string, subcategories: string[] }[]>([]);
     const [subcategoryId, setSubcategoryId] = useState('');
+    const [originalImageUrls, setOriginalImageUrls] = useState<string[]>([]);
 
     useEffect(() => {
         const fetchAll = async () => {
@@ -62,6 +64,17 @@ function EditProductContent({ paramsPromise }: { paramsPromise: Promise<{ id: st
                     setStatus(product.status || 'ativo');
                     setVariationGroups(product.variationGroups || []);
                     setVariants(product.variants || []);
+
+                    const urls = new Set<string>();
+                    (product.images || []).forEach((u: string) => urls.add(u));
+                    (product.variants || []).forEach((variant: any) => {
+                        const vUrls: string[] = [
+                            ...(variant.imageUrls || []),
+                            ...(variant.imageUrl ? [variant.imageUrl] : []),
+                        ];
+                        vUrls.forEach((u) => urls.add(u));
+                    });
+                    setOriginalImageUrls(Array.from(urls));
                 } else {
                     toast.error("Produto não encontrado.");
                     router.push('/admin/products');
@@ -138,7 +151,9 @@ function EditProductContent({ paramsPromise }: { paramsPromise: Promise<{ id: st
 
             const firstVariant = variantsWithImages[0];
 
-            await updateDoc(doc(db, 'products', params.id), {
+            const productRef = doc(db, 'products', params.id);
+
+            await updateDoc(productRef, {
                 name,
                 categoryId,
                 subcategoryId,
@@ -152,6 +167,12 @@ function EditProductContent({ paramsPromise }: { paramsPromise: Promise<{ id: st
                 status,
                 updatedAt: serverTimestamp()
             });
+
+            const newImageSet = new Set<string>(finalImages);
+            const toDelete = originalImageUrls.filter((url) => !newImageSet.has(url));
+            if (toDelete.length > 0) {
+                await deleteImagesByUrl(toDelete);
+            }
 
             toast.success('Produto atualizado com sucesso!');
             router.push('/admin/products');
