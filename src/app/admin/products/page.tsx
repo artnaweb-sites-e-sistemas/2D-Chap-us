@@ -2,11 +2,13 @@
 
 import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import Link from 'next/link';
 import { collection, getDocs, deleteDoc, doc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase/config';
 import { toast } from 'sonner';
 import { deleteImagesByUrl } from '@/lib/firebase/storageCleanup';
+import { Search } from 'lucide-react';
 
 interface ProductData {
     id: string;
@@ -20,6 +22,7 @@ interface ProductData {
 export default function ProductsPage() {
     const [products, setProducts] = useState<ProductData[]>([]);
     const [loading, setLoading] = useState(true);
+    const [searchTerm, setSearchTerm] = useState('');
 
     useEffect(() => {
         fetchProducts();
@@ -91,25 +94,45 @@ export default function ProductsPage() {
         }
     };
 
+    const filteredProducts = products.filter((product) => {
+        const term = searchTerm.trim().toLowerCase();
+        if (!term) return true;
+        return (
+            product.name.toLowerCase().includes(term) ||
+            product.category.toLowerCase().includes(term) ||
+            (product.subcategory || '').toLowerCase().includes(term) ||
+            product.id.toLowerCase().includes(term)
+        );
+    });
+
     return (
         <div className="space-y-8">
-            <div className="flex items-center justify-between">
-                <div>
-                    <h2 className="text-2xl font-bold tracking-tight">Catálogo de Produtos</h2>
-                    <p className="text-muted-foreground">Gerencie produtos, variações e categorias.</p>
-                </div>
-                <Link href="/admin/products/new">
-                    <Button>Novo Produto</Button>
-                </Link>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                {/* Simplified category quick access */}
-                <div className="bg-primary/10 border border-primary/20 p-4 rounded-lg flex justify-between items-center">
-                    <span className="font-semibold text-primary">Gerenciar Categorias</span>
-                    <Link href="/admin/products/categories">
-                        <Button variant="outline" size="sm">Acessar</Button>
-                    </Link>
+            <div className="space-y-4">
+                <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                    <div>
+                        <h2 className="text-2xl font-bold tracking-tight">Catálogo de Produtos</h2>
+                        <p className="text-muted-foreground">Busque, edite e gerencie seus produtos.</p>
+                    </div>
+                    <div className="flex flex-col gap-3 md:flex-row md:items-center">
+                        <div className="relative w-full md:w-72">
+                            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+                            <Input
+                                type="text"
+                                placeholder="Buscar por nome, categoria ou ID..."
+                                className="pl-8"
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                            />
+                        </div>
+                        <div className="flex gap-2 justify-end">
+                            <Link href="/admin/products/categories">
+                                <Button variant="outline">Categorias</Button>
+                            </Link>
+                            <Link href="/admin/products/new">
+                                <Button>Novo Produto</Button>
+                            </Link>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -127,9 +150,9 @@ export default function ProductsPage() {
                     <tbody className="divide-y divide-slate-200">
                         {loading ? (
                             <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">Carregando produtos...</td></tr>
-                        ) : products.length === 0 ? (
+                        ) : filteredProducts.length === 0 ? (
                             <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">Nenhum produto cadastrado.</td></tr>
-                        ) : products.map(product => (
+                        ) : filteredProducts.map(product => (
                             <tr key={product.id} className="hover:bg-muted/50">
                                 <td className="px-4 py-3 font-medium text-foreground">{product.name}</td>
                                 <td className="px-4 py-3 text-muted-foreground capitalize">

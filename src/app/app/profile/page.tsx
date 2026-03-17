@@ -4,15 +4,26 @@ import { useAuth } from '@/features/auth/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import Link from 'next/link';
 
 export default function ProfilePage() {
     const { user } = useAuth();
 
     return (
         <div className="max-w-3xl mx-auto space-y-8">
-            <div>
-                <h2 className="text-2xl font-bold tracking-tight">Minha Conta</h2>
-                <p className="text-muted-foreground">Mantenha seus dados atualizados e acesse seu histórico.</p>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <h2 className="text-2xl font-bold tracking-tight">Minha Conta</h2>
+                    <p className="text-muted-foreground">
+                        Mantenha seus dados atualizados e acesse seu histórico.
+                    </p>
+                </div>
+                <Link
+                    href="/app"
+                    className="inline-flex items-center justify-center rounded-full border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition hover:border-primary/40 hover:bg-primary/5 hover:text-primary"
+                >
+                    Voltar para o catálogo
+                </Link>
             </div>
 
             <div className="bg-white p-6 rounded-xl border border-border space-y-6">

@@ -1,11 +1,16 @@
 'use client';
 
+import { useEffect } from 'react';
 import { AuthGuard } from '@/features/auth/AuthGuard';
 import Link from 'next/link';
 import { useAuth } from '@/features/auth/AuthContext';
 import { ShoppingCart, User, LogOut, Package } from 'lucide-react';
+import { useCartStore } from '@/store/useCartStore';
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
+    useEffect(() => {
+        useCartStore.persist.rehydrate();
+    }, []);
     const { signOut, user } = useAuth();
     return (
         <AuthGuard allowedRoles={['cliente', 'admin']}>

@@ -2,13 +2,12 @@
 
 import { Suspense, use, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import html2canvas from 'html2canvas';
-import jsPDF from 'jspdf';
 import { Button } from '@/components/ui/button';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase/config';
 import { useAuth } from '@/features/auth/AuthContext';
 import { formatCurrency, getOrderSubtotal } from '@/lib/commerce';
+import { buildOrderPdf, loadImageAsDataUrl } from '@/lib/orderPdf';
 import { toast } from 'sonner';
 import { ArrowLeft } from 'lucide-react';
 import { OrderRecord } from '@/types/store';
@@ -25,26 +24,32 @@ function ClientOrderDetailsContent({ paramsPromise }: { paramsPromise: Promise<{
     const params = use(paramsPromise);
     const { user } = useAuth();
     const [order, setOrder] = useState<OrderRecord | null>(null);
+    const [orderShowProductImage, setOrderShowProductImage] = useState(true);
     const [loading, setLoading] = useState(true);
     const [generatingPdf, setGeneratingPdf] = useState(false);
     const printableRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
-        const fetchOrder = async () => {
+        const fetchOrderAndSettings = async () => {
             try {
-                const snap = await getDoc(doc(db, 'orders', params.id));
-                if (!snap.exists()) {
+                const [orderSnap, settingsSnap] = await Promise.all([
+                    getDoc(doc(db, 'orders', params.id)),
+                    getDoc(doc(db, 'settings', 'global')),
+                ]);
+                if (settingsSnap.exists()) {
+                    const settings = settingsSnap.data();
+                    setOrderShowProductImage(settings.orderShowProductImage !== false);
+                }
+                if (!orderSnap.exists()) {
                     toast.error('Pedido não encontrado.');
                     return;
                 }
-
-                const data = snap.data() as Omit<OrderRecord, 'id'>;
+                const data = orderSnap.data() as Omit<OrderRecord, 'id'>;
                 if (data.userId !== user?.uid) {
                     toast.error('Você não tem permissão para acessar esse pedido.');
                     return;
                 }
-
-                setOrder({ id: snap.id, ...data });
+                setOrder({ id: orderSnap.id, ...data });
             } catch (error) {
                 console.error(error);
                 toast.error('Erro ao carregar pedido.');
@@ -54,7 +59,7 @@ function ClientOrderDetailsContent({ paramsPromise }: { paramsPromise: Promise<{
         };
 
         if (user?.uid) {
-            fetchOrder();
+            fetchOrderAndSettings();
         }
     }, [params.id, user]);
 
@@ -63,19 +68,19 @@ function ClientOrderDetailsContent({ paramsPromise }: { paramsPromise: Promise<{
     };
 
     const handleGeneratePdf = async () => {
-        if (!printableRef.current) return;
+        if (!order) return;
         setGeneratingPdf(true);
-
         try {
-            const canvas = await html2canvas(printableRef.current, {
-                scale: 2,
-                backgroundColor: '#ffffff',
+            let itemImageDataUrls: (string | null)[] | undefined;
+            if (orderShowProductImage && (order.items?.length ?? 0) > 0) {
+                itemImageDataUrls = await Promise.all(
+                    (order.items ?? []).map((item) => loadImageAsDataUrl(item.imageUrl ?? ''))
+                );
+            }
+            const pdf = buildOrderPdf(order, user?.name || 'Cliente', {
+                showProductImage: orderShowProductImage,
+                itemImageDataUrls,
             });
-            const imgData = canvas.toDataURL('image/png');
-            const pdf = new jsPDF('p', 'mm', 'a4');
-            const pdfWidth = pdf.internal.pageSize.getWidth();
-            const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-            pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
             pdf.save(`pedido-${params.id.slice(0, 8).toLowerCase()}.pdf`);
         } catch (error) {
             console.error(error);
@@ -177,13 +182,20 @@ function ClientOrderDetailsContent({ paramsPromise }: { paramsPromise: Promise<{
                     <div className="mt-4 space-y-3">
                         {(order.items || []).map((item, index: number) => (
                             <div key={index} className="flex items-start justify-between gap-4 rounded-lg border border-border bg-muted/20 p-4">
-                                <div className="space-y-1">
-                                    <p className="font-medium text-foreground">{item.name}</p>
-                                    {item.variationName && <p className="text-sm text-muted-foreground">Variação: {item.variationName}</p>}
-                                    {item.sku && <p className="text-sm text-muted-foreground">SKU: {item.sku}</p>}
-                                    <p className="text-sm text-muted-foreground">Quantidade: {item.quantity}</p>
+                                <div className="flex items-start gap-3 min-w-0 flex-1">
+                                    {orderShowProductImage && item.imageUrl && (
+                                        <div className="w-14 h-14 shrink-0 rounded-md overflow-hidden bg-muted border border-border">
+                                            <img src={item.imageUrl} alt={item.name} className="w-full h-full object-cover" />
+                                        </div>
+                                    )}
+                                    <div className="space-y-1 min-w-0">
+                                        <p className="font-medium text-foreground">{item.name}</p>
+                                        {item.variationName && <p className="text-sm text-muted-foreground">Variação: {item.variationName}</p>}
+                                        {item.sku && <p className="text-sm text-muted-foreground">SKU: {item.sku}</p>}
+                                        <p className="text-sm text-muted-foreground">Quantidade: {item.quantity}</p>
+                                    </div>
                                 </div>
-                                <div className="text-right text-sm">
+                                <div className="text-right text-sm shrink-0">
                                     <p className="text-muted-foreground">Unitário: {formatCurrency(item.unitPrice || 0)}</p>
                                     <p className="font-semibold text-foreground">{formatCurrency(item.total || 0)}</p>
                                 </div>

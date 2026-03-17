@@ -13,8 +13,8 @@ import { db } from '@/lib/firebase/config';
 import { useAuth } from '@/features/auth/AuthContext';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { ClientProfile } from '@/types/store';
-import { formatCurrency } from '@/lib/commerce';
+import { ClientProfile, SettingOption } from '@/types/store';
+import { formatCurrency, normalizeSettingOptions } from '@/lib/commerce';
 
 export default function CartPage() {
     const { items, removeItem, updateQuantity, clearCart } = useCartStore();
@@ -25,6 +25,8 @@ export default function CartPage() {
     const [loading, setLoading] = useState(false);
     const [clientProfile, setClientProfile] = useState<Partial<ClientProfile> | null>(null);
     const [globalMinimumOrder, setGlobalMinimumOrder] = useState(0);
+    const [carriers, setCarriers] = useState<SettingOption[]>([]);
+    const [paymentMethods, setPaymentMethods] = useState<SettingOption[]>([]);
 
     useEffect(() => {
         const loadClientCommercialData = async () => {
@@ -33,7 +35,10 @@ export default function CartPage() {
             try {
                 const settingsSnap = await getDoc(doc(db, 'settings', 'global'));
                 if (settingsSnap.exists()) {
-                    setGlobalMinimumOrder(Number(settingsSnap.data().minimumOrderValue || 0));
+                    const data = settingsSnap.data();
+                    setGlobalMinimumOrder(Number(data.minimumOrderValue || 0));
+                    setCarriers(normalizeSettingOptions(data.carriers || []));
+                    setPaymentMethods(normalizeSettingOptions(data.paymentMethods || []));
                 }
 
                 if (user.clientId) {
@@ -59,6 +64,18 @@ export default function CartPage() {
         () => items.reduce((acc, item) => acc + item.price * item.qtde, 0),
         [items]
     );
+
+    const clientCarrierLabel = useMemo(() => {
+        if (!clientProfile?.carrier) return '';
+        const found = carriers.find((c) => c.id === clientProfile.carrier);
+        return found?.label || '';
+    }, [carriers, clientProfile?.carrier]);
+
+    const clientPaymentMethodLabel = useMemo(() => {
+        if (!clientProfile?.paymentMethod) return '';
+        const found = paymentMethods.find((m) => m.id === clientProfile.paymentMethod);
+        return found?.label || '';
+    }, [paymentMethods, clientProfile?.paymentMethod]);
 
     const minimumOrderValue = Number(clientProfile?.minimumOrderValue || globalMinimumOrder || 0);
     const missingAmount = Math.max(minimumOrderValue - subtotal, 0);
@@ -92,8 +109,8 @@ export default function CartPage() {
                 freight: 0,
                 total: subtotal,
                 status: 'novo',
-                paymentMethod: clientProfile?.paymentMethod || '',
-                carrier: clientProfile?.carrier || '',
+                paymentMethod: clientPaymentMethodLabel || '',
+                carrier: clientCarrierLabel || '',
                 deliveryLeadTime: '',
                 minimumOrderValue,
                 deliveryAddress: clientProfile?.deliveryAddress || null,
@@ -106,7 +123,7 @@ export default function CartPage() {
 
             clearCart();
             toast.success("Pedido gerado com sucesso!");
-            router.push("/app");
+            router.push("/app/orders");
 
         } catch (e) {
             console.error(e);
@@ -155,8 +172,8 @@ export default function CartPage() {
                                             <Input
                                                 type="number"
                                                 value={item.qtde}
-                                                min={item.minQt}
-                                                step={1}
+                                                min={item.multiple > 1 ? Math.ceil(item.minQt / (item.multiple || 1)) * (item.multiple || 1) : item.minQt}
+                                                step={item.multiple || 1}
                                                 onChange={(e) => updateQuantity(item.id, Number(e.target.value))}
                                                 className="w-20 text-center"
                                             />
@@ -185,40 +202,39 @@ export default function CartPage() {
                         </div>
                     </div>
 
-                    <div className="bg-card p-6 rounded-xl border border-border h-fit space-y-6">
-                        <h3 className="font-semibold text-lg border-b pb-2">Resumo</h3>
+                    <div className="bg-card p-4 rounded-xl border border-border h-fit space-y-3">
+                        <h3 className="font-semibold text-base border-b border-border pb-1.5">Resumo</h3>
 
-                        <div className="space-y-2 text-sm">
-                            <div className="flex justify-between text-muted-foreground">
-                                <span>Subtotal ({itemCount} itens)</span>
-                                <span>R$ {subtotal.toFixed(2).replace('.', ',')}</span>
+                        <div className="text-sm text-muted-foreground divide-y divide-border">
+                            <div className="py-2 first:pt-0">
+                                <div className="flex justify-between items-baseline gap-2">
+                                    <span>Subtotal ({itemCount} itens)</span>
+                                    <span className="tabular-nums font-medium text-foreground">R$ {subtotal.toFixed(2).replace('.', ',')}</span>
+                                </div>
                             </div>
-                            <div className="flex justify-between text-muted-foreground">
-                                <span>Transportadora padrão</span>
-                                <span>{clientProfile?.carrier || 'Definir depois'}</span>
+                            <div className="py-2">
+                                <p className="text-muted-foreground">Transportadora padrão</p>
+                                <p className="mt-0.5 font-medium text-foreground break-words">{clientCarrierLabel || 'Definir depois'}</p>
                             </div>
-                            <div className="flex justify-between text-muted-foreground">
-                                <span>Forma de pagamento</span>
-                                <span>{clientProfile?.paymentMethod || 'Definir depois'}</span>
+                            <div className="py-2">
+                                <p className="text-muted-foreground">Forma de pagamento</p>
+                                <p className="mt-0.5 font-medium text-foreground break-words">{clientPaymentMethodLabel || 'Definir depois'}</p>
                             </div>
                         </div>
 
                         {minimumOrderValue > 0 && (
-                            <div className={`rounded-lg border p-4 ${missingAmount > 0 ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-emerald-200 bg-emerald-50 text-emerald-900'}`}>
-                                <p className="text-sm font-medium">
-                                    Pedido mínimo do cliente: {formatCurrency(minimumOrderValue)}
-                                </p>
-                                <p className="mt-1 text-sm">
-                                    {missingAmount > 0
-                                        ? `Faltam ${formatCurrency(missingAmount)} para completar o pedido mínimo.`
-                                        : 'Pedido mínimo atingido. Você já pode finalizar o pedido.'}
-                                </p>
+                            <div className={`rounded-md border px-2.5 py-1.5 text-sm ${missingAmount > 0 ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-emerald-200 bg-emerald-50 text-emerald-900'}`}>
+                                <span className="font-medium">Mín. {formatCurrency(minimumOrderValue)}</span>
+                                {' · '}
+                                {missingAmount > 0
+                                    ? `Faltam ${formatCurrency(missingAmount)}`
+                                    : 'Mínimo atingido. Pode finalizar.'}
                             </div>
                         )}
 
-                        <div className="border-t pt-4 flex justify-between font-bold text-lg text-foreground">
-                            <span>Total do Pedido</span>
-                            <span>{formatCurrency(subtotal)}</span>
+                        <div className="border-t border-border pt-3 flex justify-between items-baseline gap-2 font-bold text-base text-foreground">
+                            <span className="shrink-0">Total do Pedido</span>
+                            <span className="whitespace-nowrap tabular-nums">{formatCurrency(subtotal)}</span>
                         </div>
 
                         <Button className="w-full h-12 text-lg font-bold" onClick={handleCheckout} disabled={loading || !canCheckout}>

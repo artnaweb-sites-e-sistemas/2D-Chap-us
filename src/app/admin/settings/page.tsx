@@ -18,8 +18,10 @@ export default function SettingsPage() {
     const [paymentMethods, setPaymentMethods] = useState<SettingOption[]>([]);
     const [carriers, setCarriers] = useState<SettingOption[]>([]);
     const [minimumOrderValue, setMinimumOrderValue] = useState('R$ 0,00');
+    const [orderShowProductImage, setOrderShowProductImage] = useState(true);
     const [loading, setLoading] = useState(true);
     const [savingMinimumOrder, setSavingMinimumOrder] = useState(false);
+    const [savingOrderImage, setSavingOrderImage] = useState(false);
 
     const loadSettings = async () => {
         setLoading(true);
@@ -34,12 +36,14 @@ export default function SettingsPage() {
                 setMinimumOrderValue(
                     formatCurrencyInput(String(Math.round(Number(data.minimumOrderValue || 0) * 100)))
                 );
+                setOrderShowProductImage(data.orderShowProductImage !== false);
             } else {
                 await setDoc(docRef, {
                     priceTables: [],
                     paymentMethods: [],
                     carriers: [],
                     minimumOrderValue: 0,
+                    orderShowProductImage: true,
                 });
             }
         } catch (error) {
@@ -86,6 +90,21 @@ export default function SettingsPage() {
         }
     };
 
+    const handleToggleOrderShowProductImage = async () => {
+        const next = !orderShowProductImage;
+        setSavingOrderImage(true);
+        try {
+            await setDoc(doc(db, 'settings', 'global'), { orderShowProductImage: next }, { merge: true });
+            setOrderShowProductImage(next);
+            toast.success(next ? 'Foto do produto ativada nos pedidos.' : 'Foto do produto desativada nos pedidos.');
+        } catch (error) {
+            console.error(error);
+            toast.error('Erro ao atualizar configuração.');
+        } finally {
+            setSavingOrderImage(false);
+        }
+    };
+
     if (loading) return <div className="p-8 text-center text-muted-foreground">Carregando configurações...</div>;
 
     return (
@@ -119,6 +138,23 @@ export default function SettingsPage() {
                             {savingMinimumOrder ? 'Salvando...' : 'Salvar regra'}
                         </Button>
                     </div>
+                </div>
+
+                <div className="pt-4 mt-4 border-t border-border flex items-center justify-between gap-4">
+                    <div>
+                        <p className="font-medium text-foreground">Exibir foto do produto no pedido</p>
+                        <p className="text-sm text-muted-foreground">Quando ativo, a imagem do produto aparece na tela de detalhes do pedido (cliente e admin).</p>
+                    </div>
+                    <button
+                        type="button"
+                        role="switch"
+                        aria-checked={orderShowProductImage}
+                        disabled={savingOrderImage}
+                        onClick={handleToggleOrderShowProductImage}
+                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none ${orderShowProductImage ? 'bg-primary' : 'bg-muted'}`}
+                    >
+                        <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition ${orderShowProductImage ? 'translate-x-5' : 'translate-x-1'}`} />
+                    </button>
                 </div>
             </div>
 

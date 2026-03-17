@@ -11,7 +11,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         <AuthGuard allowedRoles={['admin', 'equipe']}>
             <div className="min-h-screen bg-muted flex flex-col md:flex-row w-full overflow-hidden">
                 {/* Sidebar */}
-                <aside className="w-full md:w-64 bg-slate-900 text-white min-h-screen p-4 flex flex-col flex-shrink-0 z-20">
+                <aside className="w-full md:w-64 bg-slate-900 text-white min-h-screen p-4 flex flex-col flex-shrink-0 z-20 print:hidden">
                     <div className="mb-8 px-2 pt-2">
                         <h1 className="text-2xl font-bold tracking-tight text-white">2D Chapéus</h1>
                         <p className="text-sm text-slate-400 capitalize mt-1.5 border-t border-slate-700/80 pt-1.5">

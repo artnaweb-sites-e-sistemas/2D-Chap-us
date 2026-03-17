@@ -4,12 +4,13 @@ import { useState, useEffect, use, Suspense } from 'react';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
-import { Edit2, Check, X } from 'lucide-react';
+import { Edit2, Check, X, Printer, FileDown } from 'lucide-react';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase/config';
 import { useAuth } from '@/features/auth/AuthContext';
 import { toast } from 'sonner';
 import { getOrderSubtotal, normalizeSettingOptions } from '@/lib/commerce';
+import { buildOrderPdf, loadImageAsDataUrl } from '@/lib/orderPdf';
 import { OrderHistoryEntry, OrderRecord, OrderItemRecord, SettingOption } from '@/types/store';
 
 export default function OrderDetailsPage({ params }: { params: Promise<{ id: string }> }) {
@@ -32,6 +33,8 @@ function OrderDetailsContent({ paramsPromise }: { paramsPromise: Promise<{ id: s
 
     const [isEditingFreight, setIsEditingFreight] = useState(false);
     const [editFreightVal, setEditFreightVal] = useState('');
+    const [generatingPdf, setGeneratingPdf] = useState(false);
+    const [orderShowProductImage, setOrderShowProductImage] = useState(true);
 
     useEffect(() => {
         const fetchOrder = async () => {
@@ -42,7 +45,9 @@ function OrderDetailsContent({ paramsPromise }: { paramsPromise: Promise<{ id: s
                 ]);
 
                 if (settingsSnap.exists()) {
-                    setCarriers(normalizeSettingOptions(settingsSnap.data().carriers || []));
+                    const data = settingsSnap.data();
+                    setCarriers(normalizeSettingOptions(data.carriers || []));
+                    setOrderShowProductImage(data.orderShowProductImage !== false);
                 }
 
                 if (orderSnap.exists()) {
@@ -144,16 +149,41 @@ function OrderDetailsContent({ paramsPromise }: { paramsPromise: Promise<{ id: s
     const computedSubtotal = order.subtotal || getOrderSubtotal(order.items || []);
     const computedTotal = computedSubtotal + (order.freight || 0);
 
+    const handlePrint = () => window.print();
+
+    const handleGeneratePdf = async () => {
+        if (!order) return;
+        setGeneratingPdf(true);
+        try {
+            let itemImageDataUrls: (string | null)[] | undefined;
+            if (orderShowProductImage && (order.items?.length ?? 0) > 0) {
+                itemImageDataUrls = await Promise.all(
+                    (order.items ?? []).map((item) => loadImageAsDataUrl(item.imageUrl ?? ''))
+                );
+            }
+            const pdf = buildOrderPdf(order, order.clientName || 'Cliente', {
+                showProductImage: orderShowProductImage,
+                itemImageDataUrls,
+            });
+            pdf.save(`pedido-${params.id.slice(0, 8).toLowerCase()}.pdf`);
+        } catch (error) {
+            console.error(error);
+            toast.error('Não foi possível gerar o PDF.');
+        } finally {
+            setGeneratingPdf(false);
+        }
+    };
+
     return (
         <div className="space-y-6 max-w-4xl mx-auto">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between print:flex-col print:items-start print:gap-2">
                 <div>
                     <h2 className="text-2xl font-bold tracking-tight">Pedido #{params.id.slice(0, 8).toUpperCase()}</h2>
                     <p className="text-muted-foreground">
                         {order.clientName} | {order.createdAt ? new Date(order.createdAt.seconds * 1000).toLocaleDateString('pt-BR') : 'Data Indisponível'}
                     </p>
                 </div>
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-4 print:hidden">
                     <Select value={status} onChange={e => setStatus(e.target.value)} className="w-48 bg-muted/50">
                         <option value="novo">Novo</option>
                         <option value="aguardando_aprovacao">Aguardando Aprovação</option>
@@ -164,6 +194,14 @@ function OrderDetailsContent({ paramsPromise }: { paramsPromise: Promise<{ id: s
                         <option value="entregue">Entregue</option>
                         <option value="cancelado">Cancelado</option>
                     </Select>
+                    <Button variant="outline" onClick={handlePrint}>
+                        <Printer className="h-4 w-4 mr-2" />
+                        Imprimir
+                    </Button>
+                    <Button variant="outline" onClick={handleGeneratePdf} disabled={generatingPdf}>
+                        <FileDown className="h-4 w-4 mr-2" />
+                        {generatingPdf ? 'Gerando...' : 'Gerar PDF'}
+                    </Button>
                     <Button onClick={handleUpdateStatus}>Atualizar Status</Button>
                 </div>
             </div>
@@ -174,18 +212,25 @@ function OrderDetailsContent({ paramsPromise }: { paramsPromise: Promise<{ id: s
                         <h3 className="font-semibold border-b pb-4 mb-4">Itens do Pedido</h3>
                         <div className="space-y-4">
                             {(order.items || []).map((item: OrderItemRecord, i: number) => (
-                                <div key={i} className="flex justify-between items-center bg-muted/50 p-3 rounded border border-border">
-                                    <div>
-                                        <p className="font-medium">{item.name}</p>
-                                        {item.variationName && (
-                                            <p className="text-xs text-muted-foreground">Variação: {item.variationName}</p>
+                                <div key={i} className="flex justify-between items-center gap-3 bg-muted/50 p-3 rounded border border-border">
+                                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                                        {orderShowProductImage && item.imageUrl && (
+                                            <div className="w-12 h-12 shrink-0 rounded overflow-hidden bg-muted border border-border">
+                                                <img src={item.imageUrl} alt={item.name} className="w-full h-full object-cover" />
+                                            </div>
                                         )}
-                                        {item.sku && (
-                                            <p className="text-xs text-muted-foreground">SKU: {item.sku}</p>
-                                        )}
-                                        <p className="text-sm text-muted-foreground">Qtd: {item.quantity} | {formatCurrency(item.unitPrice)} un.</p>
+                                        <div>
+                                            <p className="font-medium">{item.name}</p>
+                                            {item.variationName && (
+                                                <p className="text-xs text-muted-foreground">Variação: {item.variationName}</p>
+                                            )}
+                                            {item.sku && (
+                                                <p className="text-xs text-muted-foreground">SKU: {item.sku}</p>
+                                            )}
+                                            <p className="text-sm text-muted-foreground">Qtd: {item.quantity} | {formatCurrency(item.unitPrice)} un.</p>
+                                        </div>
                                     </div>
-                                    <div className="font-bold">
+                                    <div className="font-bold shrink-0">
                                         {formatCurrency(item.total || (item.unitPrice * item.quantity))}
                                     </div>
                                 </div>
@@ -208,7 +253,7 @@ function OrderDetailsContent({ paramsPromise }: { paramsPromise: Promise<{ id: s
                         </div>
                     </div>
 
-                    <div className="bg-white p-6 rounded-xl border border-border">
+                    <div className="bg-white p-6 rounded-xl border border-border print:border-0 print:shadow-none">
                         <h3 className="font-semibold border-b pb-4 mb-4">Observações e Transporte</h3>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                             <div>
@@ -242,17 +287,17 @@ function OrderDetailsContent({ paramsPromise }: { paramsPromise: Promise<{ id: s
                                                 className="w-24 h-8 text-sm"
                                                 placeholder="0,00"
                                             />
-                                            <Button variant="ghost" size="icon" className="h-8 w-8 text-green-600 hover:bg-green-50" onClick={handleSaveFreight}>
+                                            <Button variant="ghost" size="icon" className="h-8 w-8 text-green-600 hover:bg-green-50 print:hidden" onClick={handleSaveFreight}>
                                                 <Check className="h-4 w-4" />
                                             </Button>
-                                            <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:bg-destructive/10" onClick={() => { setIsEditingFreight(false); setEditFreightVal(order.freight ? order.freight.toString() : ''); }}>
+                                            <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:bg-destructive/10 print:hidden" onClick={() => { setIsEditingFreight(false); setEditFreightVal(order.freight ? order.freight.toString() : ''); }}>
                                                 <X className="h-4 w-4" />
                                             </Button>
                                         </>
                                     ) : (
                                         <>
                                             <strong className="block">{order.freight > 0 ? formatCurrency(order.freight) : 'A combinar'}</strong>
-                                            <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-primary" onClick={() => setIsEditingFreight(true)}>
+                                            <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-primary print:hidden" onClick={() => setIsEditingFreight(true)}>
                                                 <Edit2 className="h-3 w-3" />
                                             </Button>
                                         </>
@@ -274,7 +319,7 @@ function OrderDetailsContent({ paramsPromise }: { paramsPromise: Promise<{ id: s
                                     <p className="mt-1 text-muted-foreground italic">Nenhum endereço de entrega atrelado.</p>
                                 )}
                             </div>
-                            <div className="col-span-full flex justify-end">
+                            <div className="col-span-full flex justify-end print:hidden">
                                 <Button variant="outline" onClick={handleSaveLogistics}>
                                     Salvar logística
                                 </Button>

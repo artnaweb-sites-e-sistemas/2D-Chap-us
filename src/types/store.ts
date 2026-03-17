@@ -39,6 +39,10 @@ export interface ProductRecord {
     status: string;
     variationGroups: ProductVariationGroup[];
     variants: ProductVariant[];
+    /** IDs dos clientes que podem ver este produto. Vazio/undefined = visível para todos. */
+    exclusiveToClientIds?: string[];
+    /** Se true, o produto pode ser salvo sem variações de cor. */
+    colorOptional?: boolean;
 }
 
 export interface CartItem {

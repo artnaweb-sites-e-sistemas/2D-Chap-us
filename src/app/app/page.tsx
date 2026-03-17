@@ -8,6 +8,7 @@ import { ShoppingCart, Search } from 'lucide-react';
 import { collection, getDocs } from 'firebase/firestore';
 import { db } from '@/lib/firebase/config';
 import { useCartStore } from '@/store/useCartStore';
+import { useAuth } from '@/features/auth/AuthContext';
 import { ProductRecord } from '@/types/store';
 import { normalizeProduct } from '@/lib/commerce';
 import { StoreProductCard } from '@/features/storefront/components/StoreProductCard';
@@ -18,6 +19,13 @@ interface Category {
     subcategories: string[];
 }
 
+function canSeeProduct(product: ProductRecord, clientId: string | undefined): boolean {
+    const exclusive = product.exclusiveToClientIds;
+    if (!exclusive || exclusive.length === 0) return true;
+    if (!clientId) return false;
+    return exclusive.includes(clientId);
+}
+
 export default function ClientPortalDashboard() {
     const [searchTerm, setSearchTerm] = useState('');
     const [products, setProducts] = useState<ProductRecord[]>([]);
@@ -26,8 +34,10 @@ export default function ClientPortalDashboard() {
     const [selectedSubcategory, setSelectedSubcategory] = useState('');
     const [loading, setLoading] = useState(true);
 
+    const { user } = useAuth();
+    const clientId = user?.clientId;
     const items = useCartStore((state) => state.items);
-    const cartCount = items.reduce((acc, current) => acc + current.qtde, 0);
+    const cartCount = items.length;
 
     useEffect(() => {
         const fetchStorefrontData = async () => {
@@ -37,19 +47,29 @@ export default function ClientPortalDashboard() {
                     getDocs(collection(db, 'categories')),
                 ]);
 
-                const fetchedProducts = productSnapshot.docs
+                const allProducts = productSnapshot.docs
                     .map((doc) => normalizeProduct(doc.id, doc.data()))
                     .filter((product) => product.status !== 'inativo');
 
-                const fetchedCategories = categorySnapshot.docs.map((doc) => ({
-                    id: doc.id,
-                    name: String(doc.data().name || ''),
-                    subcategories: Array.isArray(doc.data().subcategories)
-                        ? doc.data().subcategories
-                        : [],
-                }));
+                const fetchedCategories = categorySnapshot.docs
+                    .map((doc, index) => {
+                        const data = doc.data();
+                        const order =
+                            typeof data.order === 'number'
+                                ? data.order
+                                : index;
+                        return {
+                            id: doc.id,
+                            name: String(data.name || ''),
+                            subcategories: Array.isArray(data.subcategories)
+                                ? data.subcategories
+                                : [],
+                            order,
+                        };
+                    })
+                    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
-                setProducts(fetchedProducts);
+                setProducts(allProducts);
                 setCategories(fetchedCategories);
             } catch (err) {
                 console.error("Error fetching products", err);
@@ -66,9 +86,10 @@ export default function ClientPortalDashboard() {
         return acc;
     }, {});
 
-    const featuredProducts = products.slice(0, 2);
+    const featuredProducts = visibleProducts.slice(0, 2);
 
-    const filtered = products.filter((product) => {
+    const visibleProducts = products.filter((p) => canSeeProduct(p, clientId));
+    const filtered = visibleProducts.filter((product) => {
         const matchesSearch =
             product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
             product.description?.toLowerCase().includes(searchTerm.toLowerCase());

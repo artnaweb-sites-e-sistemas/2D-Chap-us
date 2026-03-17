@@ -174,6 +174,10 @@ export const normalizeProduct = (id: string, data: UnknownRecord): ProductRecord
         }));
     }
 
+    const exclusiveToClientIds = Array.isArray(data.exclusiveToClientIds)
+        ? (data.exclusiveToClientIds as string[]).filter(Boolean)
+        : undefined;
+
     return {
         id,
         name: String(data.name || 'Produto sem nome'),
@@ -187,6 +191,8 @@ export const normalizeProduct = (id: string, data: UnknownRecord): ProductRecord
         status: String(data.status || 'ativo'),
         variationGroups,
         variants,
+        exclusiveToClientIds: exclusiveToClientIds?.length ? exclusiveToClientIds : undefined,
+        colorOptional: data.colorOptional === true,
     };
 };
 

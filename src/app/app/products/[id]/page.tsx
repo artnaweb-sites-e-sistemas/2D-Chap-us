@@ -5,10 +5,18 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { doc, getDoc, getDocs, collection } from 'firebase/firestore';
 import { db } from '@/lib/firebase/config';
+import { useAuth } from '@/features/auth/AuthContext';
 import { ProductRecord, ProductVariant } from '@/types/store';
 import { getDefaultVariant, normalizeProduct } from '@/lib/commerce';
 import { ArrowLeft, ChevronLeft, ChevronRight } from 'lucide-react';
 import { ProductPurchaseControls } from '@/features/storefront/components/ProductPurchaseControls';
+
+function canSeeProduct(product: ProductRecord, clientId: string | undefined): boolean {
+    const exclusive = product.exclusiveToClientIds;
+    if (!exclusive || exclusive.length === 0) return true;
+    if (!clientId) return false;
+    return exclusive.includes(clientId);
+}
 
 interface CategoryRecord {
     id: string;
@@ -26,6 +34,8 @@ export default function ProductDetailsPage({ params }: { params: Promise<{ id: s
 function ProductDetailsContent({ paramsPromise }: { paramsPromise: Promise<{ id: string }> }) {
     const params = use(paramsPromise);
     const router = useRouter();
+    const { user, loading: authLoading } = useAuth();
+    const clientId = user?.clientId;
     const [product, setProduct] = useState<ProductRecord | null>(null);
     const [categories, setCategories] = useState<CategoryRecord[]>([]);
     const [selectedImage, setSelectedImage] = useState('');
@@ -99,13 +109,11 @@ function ProductDetailsContent({ paramsPromise }: { paramsPromise: Promise<{ id:
 
     const handleVariantChange = useCallback((variant?: ProductVariant) => {
         setSelectedVariant(variant);
-        const first = variant?.imageUrls?.[0] ?? variant?.imageUrl;
-        if (first) {
-            setSelectedImage(first);
-        }
-    }, []);
+        const first = variant?.imageUrls?.[0] ?? variant?.imageUrl ?? product?.images?.[0] ?? '';
+        setSelectedImage(first);
+    }, [product?.images]);
 
-    if (loading) {
+    if (loading || authLoading) {
         return <div className="py-12 text-center text-muted-foreground">Carregando produto...</div>;
     }
 
@@ -113,6 +121,22 @@ function ProductDetailsContent({ paramsPromise }: { paramsPromise: Promise<{ id:
         return (
             <div className="space-y-4 rounded-xl border border-border bg-card p-8 text-center">
                 <h2 className="text-xl font-semibold text-foreground">Produto não encontrado</h2>
+                <Link
+                    href="/app"
+                    className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition hover:border-primary/40 hover:bg-primary/5 hover:text-primary"
+                >
+                    <ArrowLeft className="h-4 w-4" />
+                    Voltar para o catálogo
+                </Link>
+            </div>
+        );
+    }
+
+    if (!canSeeProduct(product, clientId)) {
+        return (
+            <div className="space-y-4 rounded-xl border border-border bg-card p-8 text-center">
+                <h2 className="text-xl font-semibold text-foreground">Produto não encontrado</h2>
+                <p className="text-muted-foreground">Este produto não está disponível para sua conta.</p>
                 <Link
                     href="/app"
                     className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition hover:border-primary/40 hover:bg-primary/5 hover:text-primary"

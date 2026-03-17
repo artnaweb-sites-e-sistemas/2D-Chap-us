@@ -16,6 +16,7 @@ import {
     getVariantColorLabel,
     getVariantMinQty,
     getVariantPrice,
+    getVariantSaleMultiple,
 } from '@/lib/commerce';
 
 interface ProductPurchaseControlsProps {
@@ -52,9 +53,9 @@ export function ProductPurchaseControls({
         if (product.variationGroups.length > 0) {
             return activeVariants.find((variant) =>
                 product.variationGroups.every(
-                    (group) => variant.optionValues[group.id] === selectedValues[group.id]
+                    (group) => (variant.optionValues[group.id] ?? '') === (selectedValues[group.id] ?? '')
                 )
-            );
+            ) ?? (selectedVariantId ? activeVariants.find((v) => v.id === selectedVariantId) : undefined) ?? activeVariants[0];
         }
 
         if (activeVariants.length > 0) {
@@ -64,8 +65,18 @@ export function ProductPurchaseControls({
         return undefined;
     }, [activeVariants, product.variationGroups, selectedValues, selectedVariantId]);
 
+    const multiple = getVariantSaleMultiple(product, selectedVariant);
+
+    const snapToValidQty = (value: number) => {
+        const min = getVariantMinQty(product, selectedVariant);
+        if (multiple <= 1) return Math.max(min, Math.round(value) || min);
+        const smallest = Math.ceil(min / multiple) * multiple;
+        const candidate = Math.round(value / multiple) * multiple;
+        return Math.max(smallest, candidate || smallest);
+    };
+
     useEffect(() => {
-        setQtde(getVariantMinQty(product, selectedVariant));
+        setQtde(snapToValidQty(getVariantMinQty(product, selectedVariant)));
     }, [product, selectedVariant]);
 
     useEffect(() => {
@@ -74,6 +85,7 @@ export function ProductPurchaseControls({
 
     const minQty = getVariantMinQty(product, selectedVariant);
     const price = getVariantPrice(product, selectedVariant);
+    const minValidQty = multiple <= 1 ? minQty : Math.ceil(minQty / multiple) * multiple;
 
     const handleAdd = () => {
         if (product.variationGroups.length > 0 && !selectedVariant) {
@@ -86,6 +98,12 @@ export function ProductPurchaseControls({
             return;
         }
 
+        if (multiple > 1 && qtde % multiple !== 0) {
+            toast.error(`A quantidade deve ser múltipla de ${multiple} (ex.: ${multiple}, ${multiple * 2}, ${multiple * 3}...).`);
+            setQtde(snapToValidQty(qtde));
+            return;
+        }
+
         addItem(buildCartItem(product, qtde, selectedVariant));
         toast.success(`${product.name} adicionado ao carrinho.`);
         onAfterAdd?.();
@@ -95,30 +113,40 @@ export function ProductPurchaseControls({
         <div className={compact ? 'space-y-3' : 'space-y-4'}>
             {activeVariants.length > 0 && product.variationGroups.some((group) => group.id === 'color' || group.name.toLowerCase() === 'cor') && (
                 <div className="space-y-2">
-                    <Label>Cor</Label>
+                    <Label className="text-foreground font-medium">Cor</Label>
                     <div className="flex flex-wrap gap-2">
                         {activeVariants.map((variant) => {
                             const isActive = selectedVariant?.id === variant.id;
+                            const label = getVariantColorLabel(variant);
                             return (
                                 <button
                                     key={variant.id}
                                     type="button"
-                                    className={`group flex items-center gap-2 rounded-full border px-2.5 py-1.5 transition ${
-                                        isActive ? 'border-primary bg-primary/5' : 'border-border bg-white hover:border-primary/40'
+                                    aria-pressed={isActive}
+                                    aria-label={label ? `Cor ${label}` : 'Selecionar cor'}
+                                    className={`group flex flex-col items-center gap-1 rounded-lg border p-1.5 min-w-0 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 ${
+                                        isActive
+                                            ? 'border-primary bg-primary/5'
+                                            : 'border-border bg-card hover:border-primary/40 hover:bg-muted/20'
                                     }`}
                                     onClick={() => {
                                         setSelectedVariantId(variant.id);
                                         setSelectedValues(variant.optionValues || {});
                                     }}
-                                    title={getVariantColorLabel(variant)}
+                                    title={label || undefined}
                                 >
                                     <span
-                                        className="h-5 w-5 rounded-full border border-black/10"
+                                        className={`h-5 w-5 rounded-full border shrink-0 ${
+                                            isActive ? 'border-primary ring-2 ring-primary/25' : 'border-black/10'
+                                        }`}
                                         style={{ backgroundColor: variant.colorHex || '#D4D4D8' }}
                                     />
                                     {!compact && (
-                                        <span className="text-sm text-foreground">
-                                            {getVariantColorLabel(variant)}
+                                        <span
+                                            className={`text-[11px] font-medium truncate max-w-[3.5rem] text-center block ${isActive ? 'text-primary' : 'text-muted-foreground'}`}
+                                            title={label || undefined}
+                                        >
+                                            {label || '—'}
                                         </span>
                                     )}
                                 </button>
@@ -154,6 +182,7 @@ export function ProductPurchaseControls({
                     </div>
                     <div className="text-right text-xs text-muted-foreground">
                         <p>Venda mínima: {minQty}</p>
+                        {multiple > 1 && <p>Múltiplo: {multiple}</p>}
                         {selectedVariant?.sku && <p>SKU: {selectedVariant.sku}</p>}
                     </div>
                 </div>
@@ -168,10 +197,10 @@ export function ProductPurchaseControls({
             <div className={`flex gap-2 ${compact ? '' : 'max-w-sm'}`}>
                 <Input
                     type="number"
-                    min={minQty}
-                    step={1}
+                    min={minValidQty}
+                    step={multiple}
                     value={qtde}
-                    onChange={(event) => setQtde(Number(event.target.value))}
+                    onChange={(event) => setQtde(snapToValidQty(Number(event.target.value) || 0))}
                     className={compact ? 'w-24' : 'w-28'}
                 />
                 <Button onClick={handleAdd} className="flex-1">

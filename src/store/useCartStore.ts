@@ -1,6 +1,23 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { createJSONStorage, persist } from 'zustand/middleware';
 import { CartItem } from '@/types/store';
+
+const cartStorage = typeof window !== 'undefined'
+    ? createJSONStorage<{ items: CartItem[] }>(() => localStorage)
+    : {
+          getItem: () => null,
+          setItem: () => {},
+          removeItem: () => {},
+      };
+
+function snapToValidMultiple(qtde: number, minQt: number, multiple?: number): number {
+    if (!Number.isFinite(qtde) || qtde < 0) return minQt;
+    const mult = multiple || 1;
+    if (mult <= 1) return Math.max(minQt, Math.round(qtde));
+    const smallest = Math.ceil(minQt / mult) * mult;
+    const candidate = Math.round(qtde / mult) * mult;
+    return Math.max(smallest, candidate);
+}
 
 interface CartState {
     items: CartItem[];
@@ -19,11 +36,14 @@ export const useCartStore = create<CartState>()(
             addItem: (newItem) => set((state) => {
                 const existingItem = state.items.find(i => i.id === newItem.id);
                 if (existingItem) {
+                    const mergedQtde = snapToValidMultiple(
+                        existingItem.qtde + newItem.qtde,
+                        existingItem.minQt,
+                        existingItem.multiple
+                    );
                     return {
                         items: state.items.map(i =>
-                            i.id === newItem.id
-                                ? { ...i, qtde: i.qtde + newItem.qtde }
-                                : i
+                            i.id === newItem.id ? { ...i, qtde: mergedQtde } : i
                         )
                     };
                 }
@@ -37,9 +57,8 @@ export const useCartStore = create<CartState>()(
             updateQuantity: (id, qtde) => set((state) => ({
                 items: state.items.map(i => {
                     if (i.id !== id) return i;
-
-                    const safeQty = Number.isFinite(qtde) ? qtde : i.minQt;
-                    return { ...i, qtde: Math.max(safeQty, i.minQt) };
+                    const validQtde = snapToValidMultiple(qtde, i.minQt, i.multiple);
+                    return { ...i, qtde: validQtde };
                 })
             })),
 
@@ -50,7 +69,9 @@ export const useCartStore = create<CartState>()(
             }
         }),
         {
-            name: 'b2b-cart-storage', // saves to localStorage
+            name: 'b2b-cart-storage',
+            storage: cartStorage,
+            partialize: (state) => ({ items: state.items }),
         }
     )
 );
