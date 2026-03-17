@@ -86,9 +86,8 @@ export default function ClientPortalDashboard() {
         return acc;
     }, {});
 
-    const featuredProducts = visibleProducts.slice(0, 2);
-
     const visibleProducts = products.filter((p) => canSeeProduct(p, clientId));
+    const featuredProducts = visibleProducts.slice(0, 2);
     const filtered = visibleProducts.filter((product) => {
         const matchesSearch =
             product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
